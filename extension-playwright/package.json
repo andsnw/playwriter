@@ -23,9 +23,12 @@
     },
     "devDependencies": {
         "@types/chrome": "^0.0.315",
-        "typescript": "^5.8.2",
         "concurrently": "^8.2.2",
+        "typescript": "^5.8.2",
         "vite": "^5.4.21",
         "vite-plugin-static-copy": "^3.1.1"
+    },
+    "dependencies": {
+        "playwriter": "workspace:*"
     }
 }

@@ -34,26 +34,11 @@ import { ManualPromise } from 'playwright-core/lib/utils';
 
 import type { WebSocket, WebSocketServer } from 'playwright-core/lib/utilsBundle';
 import type websocket from 'ws';
-import type { ExtensionCommand, ExtensionEvents } from './protocol.js';
+import type { ExtensionCommandMessage, ExtensionEventMessage, ExtensionMessage } from './protocol.js';
+import type { CDPCommand, CDPResponse, CDPEvent, Protocol } from '../cdp-types.js';
 
 
 const debugLogger = debug('pw:mcp:relay');
-
-type CDPCommand = {
-  id: number;
-  sessionId?: string;
-  method: string;
-  params?: any;
-};
-
-type CDPResponse = {
-  id?: number;
-  sessionId?: string;
-  method?: string;
-  params?: any;
-  result?: any;
-  error?: { code?: number; message: string };
-};
 
 export class CDPRelayServer {
   private _wsHost: string;
@@ -180,16 +165,14 @@ export class CDPRelayServer {
     this._extensionConnectionPromise.resolve();
   }
 
-  private _handleExtensionMessage<M extends keyof ExtensionEvents>(method: M, params: ExtensionEvents[M]['params']) {
-    switch (method) {
-      case 'forwardCDPEvent':
-        const sessionId = params.sessionId || this._connectedTabInfo?.sessionId;
-        this._sendToPlaywright({
-          sessionId,
-          method: params.method,
-          params: params.params
-        });
-        break;
+  private _handleExtensionMessage(message: ExtensionEventMessage) {
+    if (message.method === 'forwardCDPEvent') {
+      const sessionId = message.params.sessionId || this._connectedTabInfo?.sessionId;
+      this._sendToPlaywright({
+        sessionId,
+        method: message.params.method,
+        params: message.params.params
+      } as CDPEvent);
     }
   }
 
@@ -215,8 +198,10 @@ export class CDPRelayServer {
         return {
           protocolVersion: '1.3',
           product: 'Chrome/Extension-Bridge',
+          revision: '1.0.0',
           userAgent: 'CDP-Bridge-Server/1.0.0',
-        };
+          jsVersion: 'V8',
+        } satisfies Protocol.Browser.GetVersionResponse;
       }
       case 'Browser.setDownloadBehavior': {
         return { };
@@ -228,7 +213,7 @@ export class CDPRelayServer {
         // Simulate auto-attach behavior with real target info
         if (!this._extensionConnection)
           throw new Error('Extension not connected. Please ensure the Chrome extension is installed and connected to the extension endpoint before connecting Playwright.');
-        const { targetInfo } = await this._extensionConnection.send('attachToTab', { });
+        const { targetInfo } = await this._extensionConnection.send({ method: 'attachToTab' });
         this._connectedTabInfo = {
           targetInfo,
           sessionId: `pw-tab-${this._nextSessionId++}`,
@@ -244,7 +229,7 @@ export class CDPRelayServer {
             },
             waitingForDebugger: false
           }
-        });
+        } satisfies CDPEvent);
         return { };
       }
       case 'Target.getTargetInfo': {
@@ -260,29 +245,27 @@ export class CDPRelayServer {
     // Top level sessionId is only passed between the relay and the client.
     if (this._connectedTabInfo?.sessionId === sessionId)
       sessionId = undefined;
-    return await this._extensionConnection.send('forwardCDPCommand', { sessionId, method, params });
+    return await this._extensionConnection.send({ 
+      method: 'forwardCDPCommand', 
+      params: { sessionId, method, params } 
+    });
   }
 
-  private _sendToPlaywright(message: CDPResponse): void {
-    debugLogger('→ Playwright:', `${message.method ?? `response(id=${message.id})`}`);
+  private _sendToPlaywright(message: CDPResponse | CDPEvent): void {
+    const logMessage = 'method' in message && message.method 
+      ? message.method 
+      : `response(id=${'id' in message ? message.id : 'unknown'})`;
+    debugLogger('→ Playwright:', logMessage);
     this._playwrightConnection?.send(JSON.stringify(message));
   }
 }
-
-type ExtensionResponse = {
-  id?: number;
-  method?: string;
-  params?: any;
-  result?: any;
-  error?: string;
-};
 
 class ExtensionConnection {
   private readonly _ws: WebSocket;
   private readonly _callbacks = new Map<number, { resolve: (o: any) => void, reject: (e: Error) => void, error: Error }>();
   private _lastId = 0;
 
-  onmessage?: <M extends keyof ExtensionEvents>(method: M, params: ExtensionEvents[M]['params']) => void;
+  onmessage?: (message: ExtensionEventMessage) => void;
   onclose?: (self: ExtensionConnection, reason: string) => void;
 
   constructor(ws: WebSocket) {
@@ -292,12 +275,12 @@ class ExtensionConnection {
     this._ws.on('error', this._onError.bind(this));
   }
 
-  async send<M extends keyof ExtensionCommand>(method: M, params: ExtensionCommand[M]['params']): Promise<any> {
+  async send(command: Omit<ExtensionCommandMessage, 'id'>): Promise<any> {
     if (this._ws.readyState !== ws.OPEN)
       throw new Error(`Unexpected WebSocket state: ${this._ws.readyState}`);
     const id = ++this._lastId;
-    this._ws.send(JSON.stringify({ id, method, params }));
-    const error = new Error(`Protocol error: ${method}`);
+    this._ws.send(JSON.stringify({ id, ...command }));
+    const error = new Error(`Protocol error: ${command.method}`);
     return new Promise((resolve, reject) => {
       this._callbacks.set(id, { resolve, reject, error });
     });
@@ -327,8 +310,8 @@ class ExtensionConnection {
     }
   }
 
-  private _handleParsedMessage(object: ExtensionResponse) {
-    if (object.id && this._callbacks.has(object.id)) {
+  private _handleParsedMessage(object: ExtensionMessage) {
+    if ('id' in object && this._callbacks.has(object.id)) {
       const callback = this._callbacks.get(object.id)!;
       this._callbacks.delete(object.id);
       if (object.error) {
@@ -338,10 +321,10 @@ class ExtensionConnection {
       } else {
         callback.resolve(object.result);
       }
-    } else if (object.id) {
+    } else if ('id' in object) {
       debugLogger('← Extension: unexpected response', object);
     } else {
-      this.onmessage?.(object.method! as keyof ExtensionEvents, object.params);
+      this.onmessage?.(object as ExtensionEventMessage);
     }
   }
 

@@ -27,7 +27,7 @@ import { BrowserContextFactory, ClientInfo } from './types.js';
 
 const debugLogger = debug('pw:mcp:relay');
 
-export async function createExtensionContext(abortSignal: AbortSignal, ): Promise<{ browserContext: playwright.BrowserContext, close: () => Promise<void> }> {
+export async function startRelayServer(abortSignal: AbortSignal, ){
   // Merge obtainBrowser into this function
   const httpServer = await startHttpServer({ port: 9988 });
   if (abortSignal.aborted) {
@@ -41,16 +41,16 @@ export async function createExtensionContext(abortSignal: AbortSignal, ): Promis
   // TODO simply call fetch. it was creatign a full fledged browser just to fetch an url previously. CRAZY
   // await cdpRelayServer.ensureExtensionConnectionForMCPContext(clientInfo, abortSignal, toolName);
   // await waitForExtension()
-  return {}
-  const browser = await playwright.chromium.connectOverCDP(cdpRelayServer.cdpEndpoint());
+  return { cdpRelayServer }
+  // const browser = await playwright.chromium.connectOverCDP(cdpRelayServer.cdpEndpoint());
 
-  return {
-    browserContext: browser.contexts()[0],
-    close: async () => {
-      debugLogger('close() called for browser context');
-      await browser.close();
-    }
-  };
+  // return {
+  //   browserContext: browser.contexts()[0],
+  //   close: async () => {
+  //     debugLogger('close() called for browser context');
+  //     await browser.close();
+  //   }
+  // };
 }
 
 

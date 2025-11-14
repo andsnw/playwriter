@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.1",
+    "devtools-protocol": "^0.0.1543509",
     "playwright-core": "^1.56.1",
     "user-agents": "^1.1.669",
     "ws": "^8.18.3",

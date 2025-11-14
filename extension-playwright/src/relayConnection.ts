@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import type { Protocol } from 'playwriter/src/cdp-types';
+import type { ExtensionCommandMessage, ExtensionResponseMessage } from 'playwriter/src/extension/protocol';
+
 export function debugLog(...args: unknown[]): void {
   const enabled = true;
   if (enabled) {
@@ -21,20 +24,6 @@ export function debugLog(...args: unknown[]): void {
     console.log('[Extension]', ...args);
   }
 }
-
-type ProtocolCommand = {
-  id: number;
-  method: string;
-  params?: any;
-};
-
-type ProtocolResponse = {
-  id?: number;
-  method?: string;
-  params?: any;
-  result?: any;
-  error?: string;
-};
 
 export class RelayConnection {
   private _debuggee: chrome.debugger.Debuggee;
@@ -110,7 +99,7 @@ export class RelayConnection {
   }
 
   private async _onMessageAsync(event: MessageEvent): Promise<void> {
-    let message: ProtocolCommand;
+    let message: ExtensionCommandMessage;
     try {
       message = JSON.parse(event.data);
     } catch (error: any) {
@@ -121,7 +110,7 @@ export class RelayConnection {
 
     debugLog('Received message:', message);
 
-    const response: ProtocolResponse = {
+    const response: ExtensionResponseMessage = {
       id: message.id,
     };
     try {
@@ -134,12 +123,12 @@ export class RelayConnection {
     this._sendMessage(response);
   }
 
-  private async _handleCommand(message: ProtocolCommand): Promise<any> {
+  private async _handleCommand(message: ExtensionCommandMessage): Promise<any> {
     if (message.method === 'attachToTab') {
       await this._tabPromise;
       debugLog('Attaching debugger to tab:', this._debuggee);
       await chrome.debugger.attach(this._debuggee, '1.3');
-      const result: any = await chrome.debugger.sendCommand(this._debuggee, 'Target.getTargetInfo');
+      const result = await chrome.debugger.sendCommand(this._debuggee, 'Target.getTargetInfo') as Protocol.Target.GetTargetInfoResponse;
       return {
         targetInfo: result?.targetInfo,
       };
@@ -147,13 +136,13 @@ export class RelayConnection {
     if (!this._debuggee.tabId)
       throw new Error('No tab is connected. Please go to the Playwright MCP extension and select the tab you want to connect to.');
     if (message.method === 'forwardCDPCommand') {
-      const { sessionId, method, params } = message.params;
+      const forwardParams = message.params as { sessionId?: string; method: string; params?: any };
+      const { sessionId, method, params } = forwardParams;
       debugLog('CDP command:', method, params);
       const debuggerSession: chrome.debugger.DebuggerSession = {
         ...this._debuggee,
         sessionId,
       };
-      // Forward CDP command to chrome.debugger
       return await chrome.debugger.sendCommand(
           debuggerSession,
           method,

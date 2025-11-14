@@ -28,6 +28,10 @@ importers:
         version: 4.0.8(@types/node@24.10.1)(@vitest/ui@4.0.8)(tsx@4.20.6)
 
   extension-playwright:
+    dependencies:
+      playwriter:
+        specifier: workspace:*
+        version: link:../playwriter
     devDependencies:
       '@types/chrome':
         specifier: ^0.0.315
@@ -52,6 +56,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.21.1
         version: 1.21.1
+      devtools-protocol:
+        specifier: ^0.0.1543509
+        version: 0.0.1543509
       playwright-core:
         specifier: ^1.56.1
         version: 1.56.1
@@ -802,6 +809,9 @@ packages:
   detect-indent@6.1.0:
     resolution: {integrity: sha512-reYkTUJAZb9gUuZ2RvVCNhVHdg62RHnJ7WJl8ftMi4diZ6NWlciOzQN88pUhSELEwflJht4oQDv0F0BMlwaYtA==}
     engines: {node: '>=8'}
+
+  devtools-protocol@0.0.1543509:
+    resolution: {integrity: sha512-JlHmIPtgDeqcL2uwPA7xryDNSb1ug9h11IexYQUG98vcyV6/L3taLRECgUk/B/7yQhXC/sgBzKj9kaB+bxmdWg==}
 
   dir-glob@3.0.1:
     resolution: {integrity: sha512-WkrWp9GR4KXfKGYzOLmTuGVi1UWFfws377n9cc55/tb6DuqyF6pcQ5AbiHEshaDpY9v6oaSr2XCDidGmMwdzIA==}
@@ -2309,6 +2319,8 @@ snapshots:
   depd@2.0.0: {}
 
   detect-indent@6.1.0: {}
+
+  devtools-protocol@0.0.1543509: {}
 
   dir-glob@3.0.1:
     dependencies:
