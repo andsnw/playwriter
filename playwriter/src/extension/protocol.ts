@@ -15,6 +15,13 @@ export type ExtensionCommandMessage =
         params?: any
       }
     }
+  | {
+      id: number
+      method: 'activateTab'
+      params: {
+        targetId: string
+      }
+    }
 
 export type ExtensionResponseMessage = {
   id: number

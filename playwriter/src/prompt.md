@@ -28,6 +28,7 @@ always detach event listener you create at the end of a message using `page.remo
 you have access to some functions in addition to playwright methods:
 
 - `async accessibilitySnapshot(page)`: gets a human readable snapshot of clickable elements on the page. useful to see the overall structure of the page and what elements you can interact with
+- `async activateTab(page)`: activates (brings to front and focuses) the browser tab for the given page
 
 example:
 

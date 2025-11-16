@@ -164,12 +164,21 @@ server.tool(
         throw new Error('accessibilitySnapshot is not available on this page')
       }
 
+      const activateTab = async (targetPage: Page) => {
+        const cdp = await context.newCDPSession(targetPage)
+        const { targetInfo } = await cdp.send('Target.getTargetInfo')
+        const targetId = targetInfo.targetId
+        await cdp.send('Playwriter.activateTab' as any, { targetId })
+        await cdp.detach()
+      }
+
       const vmContext = vm.createContext({
         page,
         context,
         state,
         console: customConsole,
         accessibilitySnapshot,
+        activateTab,
       })
 
       const wrappedCode = `(async () => { ${code} })()`

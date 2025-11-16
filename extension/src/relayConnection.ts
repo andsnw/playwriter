@@ -275,6 +275,26 @@ export class RelayConnection {
       return {};
     }
 
+    if (message.method === 'activateTab') {
+      const { targetId } = message.params;
+      debugLog('Activating tab with targetId:', targetId);
+
+      for (const [tabId, tab] of this._attachedTabs) {
+        if (tab.targetId === targetId) {
+          debugLog('Found tab to activate:', tabId);
+          await chrome.tabs.update(tabId, { active: true });
+          // const chromeTab = await chrome.tabs.get(tabId);
+          // if (chromeTab.windowId) {
+          //   await chrome.windows.update(chromeTab.windowId, { focused: true });
+          // }
+          return { success: true };
+        }
+      }
+
+      debugLog('Target not found:', targetId);
+      throw new Error(`Target not found: ${targetId}`);
+    }
+
     if (message.method === 'forwardCDPCommand') {
       const { sessionId, method, params } = message.params;
 
