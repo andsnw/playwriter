@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to Playwriter MCP</title>
+    <style>
+      :root {
+        --color-bg: #ffffff;
+        --color-text: #24292f;
+        --color-heading: #1f2328;
+        --color-border: #d0d7de;
+        --color-code-bg: #f6f8fa;
+        --color-link: #0969da;
+        --color-link-hover: #0550ae;
+        --color-success: #1a7f37;
+        --color-muted: #57606a;
+        --max-width: 640px;
+        --spacing: 1.5rem;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --color-bg: #0d1117;
+          --color-text: #e6edf3;
+          --color-heading: #f0f6fc;
+          --color-border: #30363d;
+          --color-code-bg: #161b22;
+          --color-link: #4493f8;
+          --color-link-hover: #539bf5;
+          --color-success: #3fb950;
+          --color-muted: #8d96a0;
+        }
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+          Helvetica, Arial, sans-serif;
+        font-size: 16px;
+        line-height: 1.6;
+        color: var(--color-text);
+        background-color: var(--color-bg);
+        padding: 2rem 1rem;
+      }
+
+      main {
+        max-width: var(--max-width);
+        margin: 0 auto;
+      }
+
+      h2 {
+        font-size: 1.75rem;
+        font-weight: 600;
+        color: var(--color-heading);
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--color-border);
+      }
+
+      h3 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--color-heading);
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+      }
+
+      p {
+        margin-bottom: 1rem;
+      }
+
+      a {
+        color: var(--color-link);
+        text-decoration: none;
+      }
+
+      a:hover {
+        color: var(--color-link-hover);
+        text-decoration: underline;
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 0.875em;
+        background-color: var(--color-code-bg);
+        padding: 0.2em 0.4em;
+        border-radius: 6px;
+      }
+
+      pre {
+        background-color: var(--color-code-bg);
+        padding: 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+        margin-bottom: 1rem;
+        border: 1px solid var(--color-border);
+      }
+
+      pre code {
+        background-color: transparent;
+        padding: 0;
+        font-size: 0.875rem;
+      }
+
+      ol,
+      ul {
+        margin-bottom: 1rem;
+        padding-left: 2rem;
+      }
+
+      li {
+        margin-bottom: 0.5rem;
+      }
+
+      strong {
+        font-weight: 600;
+        color: var(--color-heading);
+      }
+
+
+
+      .info-box {
+        background-color: var(--color-code-bg);
+        border-left: 4px solid var(--color-link);
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border-radius: 4px;
+      }
+
+      .step-number {
+        color: var(--color-link);
+        font-weight: 700;
+        font-size: 1.125rem;
+        margin-right: 0.75rem;
+        flex-shrink: 0;
+        line-height: 1;
+      }
+
+      .step {
+        display: flex;
+        align-items: flex-start;
+        margin-bottom: 1.5rem;
+      }
+
+      .step-content {
+        flex: 1;
+      }
+
+      footer {
+        margin-top: 3rem;
+        padding-top: 2rem;
+        border-top: 1px solid var(--color-border);
+        text-align: center;
+        color: var(--color-muted);
+        font-size: 0.875rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h2>Getting Started with Playwriter MCP</h2>
+
+        <p>
+          Playwriter MCP enables Playwright to connect to your existing Chrome
+          instance without requiring Chrome to be started in CDP mode. This
+          allows AI assistants and automation tools to interact with your
+          browser seamlessly through the Model Context Protocol.
+        </p>
+
+        <div class="info-box">
+          <strong>Prerequisites:</strong> You need Node.js installed on your
+          system to run the Playwriter MCP server.
+        </div>
+
+        <h3>Quick Start</h3>
+
+        <div class="step">
+          <span class="step-number">1</span>
+          <div class="step-content">
+            <strong>Navigate to any webpage</strong>
+            <p>
+              Open a tab with the website you want to control via MCP. This
+              could be any URL you want to automate or interact with.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <span class="step-number">2</span>
+          <div class="step-content">
+            <strong>Click the extension icon</strong>
+            <p>
+              Click the Playwriter MCP extension icon in your browser toolbar
+              to attach the debugger to the current tab. The icon will turn
+              green when successfully connected.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <span class="step-number">3</span>
+          <div class="step-content">
+            <strong>Run the Playwriter MCP server</strong>
+            <p>
+              Open your terminal and run the following command to start the MCP
+              server:
+            </p>
+            <pre><code>npx playwriter</code></pre>
+            <p>
+              This will start the relay server that bridges the extension with
+              your MCP client.
+            </p>
+          </div>
+        </div>
+
+        <div class="step">
+          <span class="step-number">4</span>
+          <div class="step-content">
+            <strong>Connect your MCP client</strong>
+            <p>
+              Your MCP client (like Claude Desktop or other AI assistants) can
+              now connect to the browser and control it using Playwright
+              commands.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>How It Works</h2>
+
+        <ul>
+          <li>
+            <strong>No new Chrome instances:</strong> Works with your current
+            browser session
+          </li>
+          <li>
+            <strong>No CDP mode required:</strong> No need to restart Chrome
+            with special flags
+          </li>
+          <li>
+            <strong>Full CDP access:</strong> Complete Chrome DevTools Protocol
+            capabilities
+          </li>
+          <li>
+            <strong>Visual feedback:</strong> Extension icon changes color to
+            indicate connection status
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Icon States</h2>
+
+        <ul>
+          <li><strong>Gray:</strong> Not connected to any tab</li>
+          <li><strong>Green:</strong> Successfully connected and ready</li>
+          <li><strong>Orange badge (...):</strong> Connecting to relay server</li>
+          <li><strong>Red badge (!):</strong> Error occurred</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Privacy &amp; Security</h2>
+
+        <p>
+          Playwriter MCP runs locally in your browser and does not send any
+          data to external servers. All browser control happens through the
+          standard Chrome DevTools Protocol on your machine.
+        </p>
+      </section>
+
+      <section>
+        <h2>Need Help?</h2>
+
+        <p>
+          For issues, feature requests, or contributions, visit the
+          <a
+            href="https://github.com/remorses/playwriter"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            GitHub repository
+          </a>
+          .
+        </p>
+      </section>
+
+      <footer>
+        <p>
+          Playwriter MCP &copy; Microsoft Corporation &middot; Licensed under
+          Apache-2.0
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>
