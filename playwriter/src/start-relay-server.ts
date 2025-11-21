@@ -2,6 +2,7 @@ import { startPlayWriterCDPRelayServer } from './extension/cdp-relay.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import util from 'node:util'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const logFilePath = path.join(__dirname, '..', 'relay-server.log')
@@ -10,7 +11,7 @@ fs.writeFileSync(logFilePath, '')
 
 const log = (...args: any[]) => {
   const message = args.map(arg =>
-    typeof arg === 'string' ? arg : JSON.stringify(arg)
+    typeof arg === 'string' ? arg : util.inspect(arg, { depth: null, colors: false })
   ).join(' ')
   fs.appendFileSync(logFilePath, message + '\n')
 }
