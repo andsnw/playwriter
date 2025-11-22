@@ -45,6 +45,12 @@ async function killProcessOnPort(port: number): Promise<void> {
     }
 }
 
+declare global {
+    var toggleExtensionForActiveTab: () => Promise<{ isConnected: boolean; state: any }>;
+    var getExtensionState: () => { connectedTabs: Map<number, { targetId: string }> };
+    var chrome: any;
+}
+
 describe('MCP Server Tests', () => {
     let client: Awaited<ReturnType<typeof createMCPClient>>['client']
     let cleanup: (() => Promise<void>) | null = null
@@ -114,7 +120,6 @@ describe('MCP Server Tests', () => {
 
         // Connect the tab
         await serviceWorker.evaluate(async () => {
-             // @ts-ignore
              await globalThis.toggleExtensionForActiveTab()
         })
 
@@ -289,7 +294,6 @@ describe('MCP Server Tests', () => {
         // 2. Enable extension on this new tab
         // Since it's a new page, extension is not connected yet
         const result = await serviceWorker.evaluate(async () => {
-            // @ts-ignore
             return await globalThis.toggleExtensionForActiveTab()
         })
         expect(result.isConnected).toBe(true)
@@ -305,11 +309,10 @@ describe('MCP Server Tests', () => {
         expect(foundPage).toBeDefined()
         expect(foundPage?.url()).toBe(testUrl)
 
-        await directBrowser.close()
+
 
         // 4. Disable extension on this tab
         const resultDisabled = await serviceWorker.evaluate(async () => {
-            // @ts-ignore
             return await globalThis.toggleExtensionForActiveTab()
         })
         expect(resultDisabled.isConnected).toBe(false)
@@ -325,11 +328,10 @@ describe('MCP Server Tests', () => {
         foundPage = pages.find(p => p.url() === testUrl)
         expect(foundPage).toBeUndefined()
 
-        await directBrowser.close()
+
 
         // 6. Re-enable extension
         const resultEnabled = await serviceWorker.evaluate(async () => {
-            // @ts-ignore
             return await globalThis.toggleExtensionForActiveTab()
         })
         expect(resultEnabled.isConnected).toBe(true)
@@ -351,7 +353,7 @@ describe('MCP Server Tests', () => {
         expect(foundPage).toBeDefined()
         expect(foundPage?.url()).toBe(testUrl)
 
-        await directBrowser.close()
+
         await page.close()
     })
     it('should maintain connection across reloads and navigation', async () => {
@@ -366,7 +368,6 @@ describe('MCP Server Tests', () => {
 
         // 2. Enable extension
         await serviceWorker.evaluate(async () => {
-            // @ts-ignore
             await globalThis.toggleExtensionForActiveTab()
         })
 
@@ -391,7 +392,7 @@ describe('MCP Server Tests', () => {
         expect(connectedPage?.url()).toBe(newUrl)
         expect(await connectedPage?.title()).toContain('Hacker News')
 
-        await directBrowser.close()
+
         await page.close()
     })
 
@@ -406,7 +407,6 @@ describe('MCP Server Tests', () => {
         await pageA.bringToFront()
         await new Promise(resolve => setTimeout(resolve, 500))
         await serviceWorker.evaluate(async () => {
-            // @ts-ignore
             await globalThis.toggleExtensionForActiveTab()
         })
 
@@ -416,49 +416,60 @@ describe('MCP Server Tests', () => {
         await pageB.bringToFront()
         await new Promise(resolve => setTimeout(resolve, 500))
         await serviceWorker.evaluate(async () => {
-            // @ts-ignore
             await globalThis.toggleExtensionForActiveTab()
         })
 
         // Get target IDs for both
         const targetIds = await serviceWorker.evaluate(async () => {
-             // @ts-ignore
              const state = globalThis.getExtensionState()
-             // @ts-ignore
+             const chrome = globalThis.chrome
              const tabs = await chrome.tabs.query({})
-             const tabA = tabs.find(t => t.url?.includes('tab-a'))
-             const tabB = tabs.find(t => t.url?.includes('tab-b'))
+             const tabA = tabs.find((t: any) => t.url?.includes('tab-a'))
+             const tabB = tabs.find((t: any) => t.url?.includes('tab-b'))
              return {
-                 // @ts-ignore
                  idA: state.connectedTabs.get(tabA?.id)?.targetId,
-                 // @ts-ignore
                  idB: state.connectedTabs.get(tabB?.id)?.targetId
              }
         })
 
-        expect(targetIds.idA).toBeTruthy()
-        expect(targetIds.idB).toBeTruthy()
+        expect(targetIds).toMatchInlineSnapshot({
+            idA: expect.any(String),
+            idB: expect.any(String)
+        }, `
+          {
+            "idA": Any<String>,
+            "idB": Any<String>,
+          }
+        `)
         expect(targetIds.idA).not.toBe(targetIds.idB)
 
         // Verify independent connections
-        const browserA = await chromium.connectOverCDP(getCdpUrl({ clientId: targetIds.idA }))
-        const browserB = await chromium.connectOverCDP(getCdpUrl({ clientId: targetIds.idB }))
+        const browser = await chromium.connectOverCDP(getCdpUrl())
 
-        const titleA = await browserA.contexts()[0].pages()[0].title()
-        const titleB = await browserB.contexts()[0].pages()[0].title()
+        const pages = browser.contexts()[0].pages()
 
-        // Both are "Example Domain" but we verified they are distinct pages via target ID
-        expect(titleA).toBe('Example Domain')
-        expect(titleB).toBe('Example Domain')
+        const results = await Promise.all(pages.map(async (p) => ({
+            url: p.url(),
+            title: await p.title()
+        })))
 
-        // Verify URL to be sure
-        const urlA = browserA.contexts()[0].pages()[0].url()
-        const urlB = browserB.contexts()[0].pages()[0].url()
-        expect(urlA).toContain('tab-a')
-        expect(urlB).toContain('tab-b')
+        expect(results).toMatchInlineSnapshot(`
+          [
+            {
+              "title": "",
+              "url": "about:blank",
+            },
+            {
+              "title": "Example Domain",
+              "url": "https://example.com/tab-a",
+            },
+            {
+              "title": "Example Domain",
+              "url": "https://example.com/tab-b",
+            },
+          ]
+        `)
 
-        await browserA.close()
-        await browserB.close()
         await pageA.close()
         await pageB.close()
     })

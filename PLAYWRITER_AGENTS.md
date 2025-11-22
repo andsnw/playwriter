@@ -37,3 +37,15 @@ curl -sL https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/mast
 ```
 
 you can list other files in that folder on github to read more if you need to control things like DOM, performance, etc
+
+## testing
+
+run `cd playwriter && pnpm test` to test the extension and mcp and CDP directly in a chrome instance automated. with the extension loaded too.
+
+the test script will also pass -u to update some inline snapshots used
+
+you can run singular tests with `-t "testname"`
+
+each test() block should reset the extension connection to make sure tests are independent.
+
+NEVER call browser.close() in the tests
