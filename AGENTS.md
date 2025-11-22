@@ -1,3 +1,21 @@
+this codebase has the codebase for playwriter
+
+the extension uses chrome.debugger to manage the user browser
+
+read ./README.md for an overview of how this extension and mcp work
+
+## architecture
+
+- user installs the extension in chrome. we assume there is only one chrome window for now, the first opened. 
+- extension connects to a websocket server. on 19988. if this server is still not open, it retries connecting in a loop
+- the MCP spawns the ws server if not already listening on 19988, in background. the mcp then connects to this same server with a playwright client
+- the server exposes /cdp/client-id which is used by playwright clients to communicate with the extension
+- the extension instead connects to /extension which is used to receive cdp commands and send responses and cdp events.
+- some events are treated specially for example because
+  - we need to send attachedToTarget to let playwright know which pages are available
+  - we need to send detachedFromTarget when we disable the extension in a tab
+  - a few more events need custom handling
+- tabs are identified by sessionId or targetId (CDP concepts) or tabId (chrome debugger concept only)
 
 # core guidelines
 
@@ -247,6 +265,8 @@ if after doing this we still have duplicate packages, you will have to ask the u
 
 do not write new test files unless asked. do not write tests if there is not already a test or describe block for that function or module.
 
+if the inputs for the tests is an array of repetitive fields and long content, generate this input data programmatically instead of hardcoding everything. only hardcode the important parts and generate other repetitive fields in a .map or .reduce
+
 tests should validate complex and non-obvious logic. if a test looks like a placeholder, do not add it.
 
 use vitest to run tests. tests should be run from the current package directory and not root. try using the test script instead of vitest directly. additional vitest flags can be added at the end, like --run to disable watch mode or -u to update snapshots.
@@ -279,6 +299,12 @@ sometimes tests work directly on database data, using prisma. to run these tests
 never write tests yourself that call prisma or interact with database or emails. for these, ask the user to write them for you.
 
 # changelog
+
+## 1.1.3
+
+### Patch Changes
+
+- vitest.md instructions update
 
 ## 1.1.2
 
