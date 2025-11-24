@@ -29,6 +29,7 @@
     "@mizchi/selector-generator": "1.50.0-next",
     "@types/node": "^24.10.1",
     "@vitest/ui": "^4.0.8",
+    "mcp-extension": "workspace:*",
     "vite-node": "^5.0.0",
     "vitest": "^4.0.8"
   },

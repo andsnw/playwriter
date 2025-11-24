@@ -7,6 +7,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { getCdpUrl } from './utils.js'
+import type { ExtensionState } from 'mcp-extension/src/types.js'
 
 import { spawn } from 'node:child_process'
 
@@ -51,8 +52,8 @@ async function killProcessOnPort(port: number): Promise<void> {
 }
 
 declare global {
-    var toggleExtensionForActiveTab: () => Promise<{ isConnected: boolean; state: any }>;
-    var getExtensionState: () => { connectedTabs: Map<number, { targetId: string; state: string }>; connectionState: string };
+    var toggleExtensionForActiveTab: () => Promise<{ isConnected: boolean; state: ExtensionState }>;
+    var getExtensionState: () => ExtensionState;
     var disconnectEverything: () => Promise<void>;
     var chrome: any;
 }
