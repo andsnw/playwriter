@@ -609,6 +609,7 @@ server.tool(
 
 // Start the server
 async function main() {
+  await ensureRelayServer()
   const transport = new StdioServerTransport()
   await server.connect(transport)
   // console.error('Playwright MCP server running on stdio')
