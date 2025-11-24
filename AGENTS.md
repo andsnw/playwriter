@@ -57,6 +57,12 @@ to debug server or extension issues you can also inspect the file playwriter/rel
 
 tests will take about 30 seconds, so set a timeout of at least 60 seconds when running the test bash command
 
+## changelogs
+
+when you do an important change, update relevant CHANGELOG.md files for each package.
+
+also bump package.json versions and IMPORTANT also the extension/manifest.json version too
+
 # core guidelines
 
 when summarizing changes at the end of the message, be super short, a few words and in bullet points, use bold text to highlight important keywords. use markdown.
