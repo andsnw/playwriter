@@ -445,7 +445,8 @@ export class RelayConnection {
 
         case 'Target.closeTarget': {
           if (!targetTab || !targetTab.debuggee.tabId) {
-            throw new Error(`Target not found: ${msg.params.params?.targetId}`)
+            logger.log(`Target not found: ${msg.params.params?.targetId}`)
+            return { success: false } satisfies Protocol.Target.CloseTargetResponse
           }
           await chrome.tabs.remove(targetTab.debuggee.tabId!)
           return { success: true } satisfies Protocol.Target.CloseTargetResponse
