@@ -67,12 +67,14 @@ type VMContextWithGlobals = VMContext & typeof usefulGlobals
 
 type SelectorGenerator = typeof import('@mizchi/selector-generator')
 
-const state: State = {
+const mcpState: State = {
   isConnected: false,
   page: null,
   browser: null,
   context: null,
 }
+
+const userState: Record<string, any> = {}
 
 // Store logs per page targetId
 const browserLogs: Map<string, string[]> = new Map()
@@ -80,6 +82,17 @@ const MAX_LOGS_PER_PAGE = 5000
 
 const RELAY_PORT = 19988
 const NO_TABS_ERROR = `No browser tabs are connected. Please install and enable the Playwriter extension on at least one tab: https://chromewebstore.google.com/detail/playwriter-mcp/jfeammnjpkecdekppnclgkkffahnhfhe`
+
+function clearUserState() {
+  Object.keys(userState).forEach((key) => delete userState[key])
+}
+
+function clearConnectionState() {
+  mcpState.isConnected = false
+  mcpState.browser = null
+  mcpState.page = null
+  mcpState.context = null
+}
 
 async function isPortTaken(port: number): Promise<boolean> {
   try {
@@ -123,8 +136,8 @@ async function ensureRelayServer(): Promise<void> {
 }
 
 async function ensureConnection(): Promise<{ browser: Browser; page: Page }> {
-  if (state.isConnected && state.browser && state.page) {
-    return { browser: state.browser, page: state.page }
+  if (mcpState.isConnected && mcpState.browser && mcpState.page) {
+    return { browser: mcpState.browser, page: mcpState.page }
   }
 
   await ensureRelayServer()
@@ -149,10 +162,10 @@ async function ensureConnection(): Promise<{ browser: Browser; page: Page }> {
   // Set up console listener for all existing pages
   context.pages().forEach(p => setupPageConsoleListener(p))
 
-  state.browser = browser
-  state.page = page
-  state.context = context
-  state.isConnected = true
+  mcpState.browser = browser
+  mcpState.page = page
+  mcpState.context = context
+  mcpState.isConnected = true
 
   return { browser, page }
 }
@@ -224,12 +237,12 @@ function setupPageConsoleListener(page: Page) {
 }
 
 async function getCurrentPage(timeout = 5000) {
-  if (state.page) {
-    return state.page
+  if (mcpState.page) {
+    return mcpState.page
   }
 
-  if (state.browser) {
-    const contexts = state.browser.contexts()
+  if (mcpState.browser) {
+    const contexts = mcpState.browser.contexts()
     if (contexts.length > 0) {
       const pages = contexts[0].pages()
 
@@ -246,18 +259,16 @@ async function getCurrentPage(timeout = 5000) {
 }
 
 async function resetConnection(): Promise<{ browser: Browser; page: Page; context: BrowserContext }> {
-  if (state.browser) {
+  if (mcpState.browser) {
     try {
-      await state.browser.close()
+      await mcpState.browser.close()
     } catch (e) {
       console.error('Error closing browser:', e)
     }
   }
 
-  state.browser = null
-  state.page = null
-  state.context = null
-  state.isConnected = false
+  clearConnectionState()
+  clearUserState()
 
   // DO NOT clear browser logs on reset - logs should persist across reconnections
   // browserLogs.clear()
@@ -284,10 +295,10 @@ async function resetConnection(): Promise<{ browser: Browser; page: Page; contex
   // Set up console listener for all existing pages
   context.pages().forEach(p => setupPageConsoleListener(p))
 
-  state.browser = browser
-  state.page = page
-  state.context = context
-  state.isConnected = true
+  mcpState.browser = browser
+  mcpState.page = page
+  mcpState.context = context
+  mcpState.isConnected = true
 
   return { browser, page, context }
 }
@@ -312,14 +323,14 @@ server.tool(
     timeout: z.number().default(5000).describe('Timeout in milliseconds for code execution (default: 5000ms)'),
   },
   async ({ code, timeout }) => {
-    await ensureRelayServer()
-    await ensureConnection()
-
-    const page = await getCurrentPage(timeout)
-    const context = state.context || page.context()
-
-    console.error('Executing code:', code)
     try {
+      await ensureRelayServer()
+      await ensureConnection()
+
+      const page = await getCurrentPage(timeout)
+      const context = mcpState.context || page.context()
+
+      console.error('Executing code:', code)
       const consoleLogs: Array<{ method: string; args: any[] }> = []
 
       const customConsole = {
@@ -461,7 +472,7 @@ server.tool(
       let vmContextObj: VMContextWithGlobals = {
         page,
         context,
-        state,
+        state: userState,
         console: customConsole,
         accessibilitySnapshot,
         getLocatorStringForElement,
@@ -470,12 +481,10 @@ server.tool(
         resetPlaywright: async () => {
           const { page: newPage, context: newContext } = await resetConnection()
 
-          Object.keys(state).forEach(key => delete state[key])
-
           const resetObj: VMContextWithGlobals = {
             page: newPage,
             context: newContext,
-            state,
+            state: userState,
             console: customConsole,
             accessibilitySnapshot,
             getLocatorStringForElement,
@@ -553,14 +562,27 @@ server.tool(
         ],
       }
     } catch (error: any) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error executing code: ${error.message}\n${error.stack || ''}`,
-          },
-        ],
-        isError: true,
+      console.error('Error in execute tool, attempting reset:', error.message)
+      try {
+        await resetConnection()
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Connection was reset due to error. Please retry your command.\n\nError: ${error.message}`,
+            },
+          ],
+        }
+      } catch (resetError: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error executing code: ${error.message}\n${error.stack || ''}`,
+            },
+          ],
+          isError: true,
+        }
       }
     }
   },
