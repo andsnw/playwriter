@@ -14,14 +14,21 @@ Required to attach the Chrome debugger to the current tab when the user clicks t
 
 Essential for core functionality. This permission allows the extension to attach Chrome DevTools Protocol (CDP) to tabs selected by the user (via clicking the extension icon). CDP access enables the extension to relay automation commands from local Playwright scripts to the browser, allowing actions like page navigation, element interaction, and JavaScript execution for testing and development purposes.
 
-### tabs
+### tabs (Testing Only - Removed in Production Builds)
 
-Required to:
-- Track which tabs have active debugger connections (shown via icon color)
-- Detect when connected tabs are closed to properly clean up debugger attachments
-- Update extension icon state across all tabs
-- Create, close, and switch between automated tabs
-- Monitor tab activation events
+**Note: This permission is automatically removed during production builds and is only included in test builds.**
+
+The tabs permission is only needed during development/testing to:
+- Access the URL property of tabs for test identification (finding tabs by URL pattern)
+- Query all tabs with full information for test assertions
+
+In production, the extension functions perfectly without the tabs permission because:
+- Tab event listeners (onRemoved, onActivated, onUpdated) work without it
+- chrome.tabs.create() and chrome.tabs.remove() work without it
+- chrome.tabs.query() for active tab works without it
+- chrome.tabs.get() works without it (returns limited info which is sufficient)
+
+The build process (vite.config.mts) automatically removes this permission when TESTING environment variable is not set.
 
 ### host_permissions (<all_urls>)
 

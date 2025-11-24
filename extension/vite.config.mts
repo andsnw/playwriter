@@ -2,6 +2,7 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { defineConfig } from 'vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
+import fs from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,7 +22,17 @@ export default defineConfig({
         },
         {
           src: resolve(__dirname, 'manifest.json'),
-          dest: '.'
+          dest: '.',
+          transform: (content) => {
+            const manifest = JSON.parse(content);
+            
+            // Only include tabs permission during testing
+            if (!process.env.TESTING) {
+              manifest.permissions = manifest.permissions.filter((p: string) => p !== 'tabs');
+            }
+            
+            return JSON.stringify(manifest, null, 2);
+          }
         },
         {
           src: resolve(__dirname, 'welcome.html'),
