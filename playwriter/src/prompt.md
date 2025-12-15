@@ -81,6 +81,13 @@ you have access to some functions in addition to playwright methods:
     - `page`: (optional) filter logs by a specific page instance. Only returns logs from that page
     - `count`: (optional) limit number of logs to return. If not specified, returns all available logs
     - `search`: (optional) string or regex to filter logs. Only returns logs that match
+- `waitForPageLoad({ page, timeout, pollInterval, minWait })`: smart network-aware page load detection. Playwright's `networkidle` waits for ALL requests to finish, which often times out on sites with analytics/ads. This function ignores those and returns when meaningful content is loaded.
+    - `page`: the page object to wait on
+    - `timeout`: (optional) max wait time in ms (default: 30000)
+    - `pollInterval`: (optional) how often to check in ms (default: 100)
+    - `minWait`: (optional) minimum wait before checking in ms (default: 500)
+    - Returns: `{ success, readyState, pendingRequests, waitTimeMs, timedOut }`
+    - Filters out: ad networks (doubleclick, googlesyndication), analytics (google-analytics, mixpanel, segment), social (facebook.net, twitter), support widgets (intercom, zendesk), and slow fonts/images
 
 To bring a tab to front and focus it, use the standard Playwright method `await page.bringToFront()`
 

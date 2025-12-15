@@ -12,6 +12,7 @@ import vm from 'node:vm'
 import dedent from 'string-dedent'
 import { createPatch } from 'diff'
 import { getCdpUrl } from './utils.js'
+import { waitForPageLoad, WaitForPageLoadOptions, WaitForPageLoadResult } from './wait-for-page-load.js'
 
 const require = createRequire(import.meta.url)
 
@@ -60,6 +61,7 @@ interface VMContext {
   resetPlaywright: () => Promise<{ page: Page; context: BrowserContext }>
   getLatestLogs: (options?: { page?: Page; count?: number; search?: string | RegExp }) => Promise<string[]>
   clearAllLogs: () => void
+  waitForPageLoad: (options: WaitForPageLoadOptions) => Promise<WaitForPageLoadResult>
   require: NodeRequire
   import: (specifier: string) => Promise<any>
 }
@@ -527,6 +529,7 @@ server.tool(
         getLocatorStringForElement,
         getLatestLogs,
         clearAllLogs,
+        waitForPageLoad,
         resetPlaywright: async () => {
           const { page: newPage, context: newContext } = await resetConnection()
 
@@ -539,6 +542,7 @@ server.tool(
             getLocatorStringForElement,
             getLatestLogs,
             clearAllLogs,
+            waitForPageLoad,
             resetPlaywright: vmContextObj.resetPlaywright,
             require,
             // TODO --experimental-vm-modules is needed to make import work in vm
