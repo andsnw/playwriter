@@ -7,29 +7,29 @@
     <style>
       :root {
         --color-bg: #ffffff;
-        --color-text: #24292f;
-        --color-heading: #1f2328;
-        --color-border: #d0d7de;
-        --color-code-bg: #f6f8fa;
+        --color-text: #262626;
+        --color-heading: #171717;
+        --color-border: #d4d4d4;
+        --color-code-bg: #f5f5f5;
         --color-link: #0969da;
         --color-link-hover: #0550ae;
-        --color-success: #1a7f37;
-        --color-muted: #57606a;
+        --color-success: #16a34a;
+        --color-muted: #737373;
         --max-width: 640px;
         --spacing: 1.5rem;
       }
 
       @media (prefers-color-scheme: dark) {
         :root {
-          --color-bg: #0d1117;
-          --color-text: #e6edf3;
-          --color-heading: #f0f6fc;
-          --color-border: #30363d;
-          --color-code-bg: #161b22;
+          --color-bg: #0a0a0a;
+          --color-text: #e5e5e5;
+          --color-heading: #fafafa;
+          --color-border: #404040;
+          --color-code-bg: #171717;
           --color-link: #4493f8;
           --color-link-hover: #539bf5;
-          --color-success: #3fb950;
-          --color-muted: #8d96a0;
+          --color-success: #22c55e;
+          --color-muted: #a3a3a3;
         }
       }
 
@@ -146,6 +146,32 @@
         flex: 1;
       }
 
+      .install-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background-color: #262626;
+        color: #fff;
+        border-radius: 0.5rem;
+        text-decoration: none;
+        transition: background-color 0.15s;
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-top: 0.5rem;
+      }
+
+      .install-button:hover {
+        background-color: #404040;
+        color: #fff;
+        text-decoration: none;
+      }
+
+      .install-button svg {
+        width: 1.25rem;
+        height: 1.25rem;
+      }
+
       footer {
         margin-top: 3rem;
         padding-top: 2rem;
@@ -212,6 +238,24 @@
   }
 }</code></pre>
             <p>
+              Or install directly in Cursor:
+            </p>
+            <a
+              href="https://cursor.com/en/install-mcp?name=playwriter&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyJwbGF5d3JpdGVyQGxhdGVzdCJdfQ%3D%3D"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="install-button"
+            >
+              <svg viewBox="0 0 466.73 533.32" xmlns="http://www.w3.org/2000/svg">
+                <path d="m233.37 266.66 231.16 133.46c-1.42 2.46-3.48 4.56-6.03 6.03l-216.06 124.74c-5.61 3.24-12.53 3.24-18.14 0l-216.06-124.74c-2.55-1.47-4.61-3.57-6.03-6.03z" fill="#72716d"/>
+                <path d="m233.37 0v266.66l-231.16 133.46c-1.42-2.46-2.21-5.3-2.21-8.24v-250.44c0-5.89 3.14-11.32 8.24-14.27l216.05-124.74c2.81-1.62 5.94-2.43 9.07-2.43z" fill="#55544f"/>
+                <path d="m464.52 133.2c-1.42-2.46-3.48-4.56-6.03-6.03l-216.06-124.74c-2.8-1.62-5.93-2.43-9.06-2.43v266.66l231.16 133.46c1.42-2.46 2.21-5.3 2.21-8.24v-250.44c0-2.95-.78-5.77-2.21-8.24z" fill="#43413c"/>
+                <path d="m448.35 142.54c1.31 2.26 1.49 5.16 0 7.74l-209.83 363.42c-1.41 2.46-5.16 1.45-5.16-1.38v-239.48c0-1.91-.51-3.75-1.44-5.36l216.42-124.95h.01z" fill="#d6d5d2"/>
+                <path d="m448.35 142.54-216.42 124.95c-.92-1.6-2.26-2.96-3.92-3.92l-207.39-119.74c-2.46-1.41-1.45-5.16 1.38-5.16h419.65c2.98 0 5.4 1.61 6.7 3.87z" fill="#fff"/>
+              </svg>
+              Install in Cursor
+            </a>
+            <p style="margin-top: 1rem;">
               This will enable your AI assistant to control the browser through
               the extension.
             </p>
