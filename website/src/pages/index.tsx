@@ -19,6 +19,7 @@ import { SafeMdxRenderer } from 'safe-mdx'
 import { mdxParse } from 'safe-mdx/parse'
 import type { MyRootContent } from 'safe-mdx'
 import path from 'node:path'
+import { publicDir as spiceflowPublicDir } from 'spiceflow'
 import {
   EditorialPage,
   Aside,
@@ -115,11 +116,12 @@ function groupBySections(root: Root): MdastSection[] {
 /* Parse MDX at module level (sync, no fs needed) */
 const mdast = mdxParse(mdxContent)
 
-/* Resolve directories relative to this file.
- * import.meta.dirname is the directory of this source file (website/src/pages/).
- * Public dir is website/public/, cache dir is website/.cache/images/. */
-const publicDir = path.resolve(import.meta.dirname, '../../public')
-const cacheDir = path.resolve(import.meta.dirname, '../../.cache/images')
+/* publicDir is injected by spiceflow at build time via virtual:spiceflow-dirs.
+ * In dev it points to website/public/, on Vercel it points to the function's
+ * client/ dir where Vite copies public/ assets. cacheDir is next to publicDir
+ * but cache writes are optional (Vercel fs is read-only). */
+const publicDir = spiceflowPublicDir
+const cacheDir = path.resolve(spiceflowPublicDir, '../.cache/images')
 
 export async function IndexPage() {
   /* Build image manifest — reads/generates cached placeholders + dimensions */

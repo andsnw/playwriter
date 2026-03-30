@@ -86,7 +86,11 @@ export async function buildImageManifest({
   const srcs = collectImageSrcs(mdast)
   const manifest: Record<string, ImageMeta> = {}
 
-  fs.mkdirSync(cacheDir, { recursive: true })
+  try {
+    fs.mkdirSync(cacheDir, { recursive: true })
+  } catch {
+    /* Vercel and similar platforms have read-only filesystems */
+  }
 
   await Promise.all(
     srcs.map(async (src) => {
@@ -160,9 +164,13 @@ async function getOrGenerateImageMeta({
     placeholder: `data:image/png;base64,${placeholderBuf.toString('base64')}`,
   }
 
-  /* Write cache */
-  const entry: CacheEntry = { ...meta, mtime: stat.mtimeMs }
-  fs.writeFileSync(cachePath, JSON.stringify(entry))
+  /* Write cache — skip silently on read-only filesystems (Vercel) */
+  try {
+    const entry: CacheEntry = { ...meta, mtime: stat.mtimeMs }
+    fs.writeFileSync(cachePath, JSON.stringify(entry))
+  } catch {
+    /* read-only fs, cache will regenerate next time */
+  }
 
   return meta
 }
