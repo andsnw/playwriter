@@ -115,7 +115,7 @@ const DEFAULT_EXEC_TIMEOUT = Number(process.env.PLAYWRITER_EXEC_TIMEOUT) || 1000
 
 cli
   .command('', 'Start the MCP server or controls the browser with -e')
-  .option('--host <host>', 'Remote relay server to connect to (or use PLAYWRITER_HOST env var)')
+  .option('--host <host>', 'Remote relay server host to connect to (or use PLAYWRITER_HOST env var)')
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
   .option('-s, --session <name>', 'Session ID (required for -e, get one with `playwriter session new`)')
   .option('-e, --eval <code>', 'Execute JavaScript code and exit, read https://playwriter.dev/SKILL.md for usage')
