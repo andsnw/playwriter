@@ -191,7 +191,7 @@ The `-s` flag specifies a session ID (required). Get one with `playwriter sessio
 **Execution timeout:** default is 10000ms. Override per call with `--timeout <ms>`, or set a new default via env:
 
 ```bash
-# One-off longer timeout (e.g. createDemoVideo, slow navigations)
+# One-off longer timeout 
 playwriter -s 1 --timeout 120000 -e '...'
 
 # Default for all -e/-f in this shell
@@ -199,8 +199,7 @@ export PLAYWRITER_EXEC_TIMEOUT=30000
 playwriter -s 1 -e '...'
 ```
 
-`PLAYWRITER_EXEC_TIMEOUT` is the fallback default only; an explicit `--timeout` always wins. MCP clients can set the same env var on the server process, or pass `timeout` on each `execute` call.
-
+PLAYWRITER_EXEC_TIMEOUT is the default fallback. --timeout overrides it, and MCP clients can set the env var or pass a per-call timeout.
 **Examples:**
 
 ```bash
