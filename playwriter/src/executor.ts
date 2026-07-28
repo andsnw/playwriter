@@ -1593,7 +1593,21 @@ export class PlaywrightExecutor {
           return { page: newPage, context: newContext }
         },
         require: this.sandboxedRequire,
-        import: (specifier: string) => import(specifier),
+        import: (specifier: string) => {
+          if (!ALLOWED_MODULES.has(specifier)) {
+            throw Object.assign(
+              new Error(
+                `Module "${specifier}" is not allowed in the sandbox. ` +
+                  `Only safe Node.js built-ins are permitted: ${[...ALLOWED_MODULES].filter((m) => !m.startsWith('node:')).join(', ')}`,
+              ),
+              { name: 'ModuleNotAllowedError' },
+            )
+          }
+          if (specifier === 'fs' || specifier === 'node:fs') {
+            return Promise.resolve(this.scopedFs)
+          }
+          return import(specifier)
+        },
         // Ghost Browser API - only works in Ghost Browser, mirrors chrome.ghostPublicAPI etc
         chrome: chromeGhostBrowser,
         ...usefulGlobals,
@@ -1601,11 +1615,27 @@ export class PlaywrightExecutor {
         // - cwd() returns the session's cwd instead of the relay server's cwd
         // - exit() is blocked to prevent killing the relay server
         // - chdir() is blocked to prevent affecting other sessions
+        // - getBuiltinModule() is blocked because it bypasses ALLOWED_MODULES (issue #105)
         process: new Proxy(process, {
           get(target, prop, receiver) {
             if (prop === 'cwd') return () => self.sessionCwd || target.cwd()
             if (prop === 'exit') return () => { throw new Error('process.exit() is not allowed in the sandbox') }
             if (prop === 'chdir') return () => { throw new Error('process.chdir() is not allowed in the sandbox, use a new session with a different cwd instead') }
+            if (prop === 'getBuiltinModule') return (id: string) => {
+              if (!ALLOWED_MODULES.has(id)) {
+                throw Object.assign(
+                  new Error(
+                    `Module "${id}" is not allowed in the sandbox. ` +
+                      `Only safe Node.js built-ins are permitted: ${[...ALLOWED_MODULES].filter((m) => !m.startsWith('node:')).join(', ')}`,
+                  ),
+                  { name: 'ModuleNotAllowedError' },
+                )
+              }
+              if (id === 'fs' || id === 'node:fs') {
+                return self.scopedFs
+              }
+              return process.getBuiltinModule(id)
+            }
             return Reflect.get(target, prop, receiver)
           },
         }),

@@ -1599,4 +1599,28 @@ describe('Relay Core Tests', () => {
     await client.callTool({ name: 'execute', arguments: { code: js`await state.errorTestPage.close(); delete state.errorTestPage;` } })
   }, 30000)
 
+  // Sandbox escape tests (issue #105): process.getBuiltinModule and import()
+  // must respect ALLOWED_MODULES the same way require() does.
+  it('should block process.getBuiltinModule for disallowed modules', async () => {
+    await ensureConnectedTabForExecute()
+    const result = await client.callTool({
+      name: 'execute',
+      arguments: { code: js`return process.getBuiltinModule('node:child_process')` },
+    })
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.content)).toContain('not allowed in the sandbox')
+  }, 30000)
+
+  it('should block import() function for disallowed modules', async () => {
+    // The vm context exposes `import` as a regular function property (not the import() keyword).
+    // Access it via globalThis to test the sandbox restriction.
+    await ensureConnectedTabForExecute()
+    const result = await client.callTool({
+      name: 'execute',
+      arguments: { code: js`const cp = await globalThis.import('node:child_process'); return cp` },
+    })
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.content)).toContain('not allowed in the sandbox')
+  }, 30000)
+
 })

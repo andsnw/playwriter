@@ -332,10 +332,11 @@ You can collaborate with the user - they can help with captchas, difficult eleme
 - `state` - object persisted between calls **within your session**. Each session has its own isolated state. Use to store pages, data, listeners (e.g., `state.page = await context.newPage()`)
 - `page` - a default page (may be shared with other agents). Prefer creating your own page and storing it in `state` (see "working with pages")
 - `context` - browser context, access all pages via `context.pages()`
-- `require` - load Node.js modules (e.g., `const fs = require('node:fs')`). ESM `import` is not available in the sandbox
+- `require` - load Node.js modules (e.g., `const fs = require('node:fs')`)
+- `import` - dynamic ESM import, same allowlist as `require` (e.g., `const fs = await import('node:fs')`)
 - Node.js globals: `setTimeout`, `setInterval`, `fetch`, `URL`, `Buffer`, `crypto`, `process`, etc.
 
-**Not available in the sandbox:** `__dirname`, `__filename`, `import`.
+**Not available in the sandbox:** `__dirname`, `__filename`.
 
 **Important:** `state` is **session-isolated** but pages are **shared** across all sessions. See "working with pages" for how to avoid interference.
 
