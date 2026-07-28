@@ -1611,13 +1611,24 @@ describe('Relay Core Tests', () => {
     expect(JSON.stringify(result.content)).toContain('not allowed in the sandbox')
   }, 30000)
 
-  it('should block import() function for disallowed modules', async () => {
-    // The vm context exposes `import` as a regular function property (not the import() keyword).
-    // Access it via globalThis to test the sandbox restriction.
+  it('should block importModule() for disallowed modules', async () => {
     await ensureConnectedTabForExecute()
     const result = await client.callTool({
       name: 'execute',
-      arguments: { code: js`const cp = await globalThis.import('node:child_process'); return cp` },
+      arguments: { code: js`const cp = await importModule('node:child_process'); return cp` },
+    })
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.content)).toContain('not allowed in the sandbox')
+  }, 30000)
+
+  it('should block getBuiltinModule via Object.getOwnPropertyDescriptor bypass', async () => {
+    await ensureConnectedTabForExecute()
+    const result = await client.callTool({
+      name: 'execute',
+      arguments: { code: js`
+        const desc = Object.getOwnPropertyDescriptor(process, 'getBuiltinModule')
+        return desc.value('node:child_process')
+      ` },
     })
     expect(result.isError).toBe(true)
     expect(JSON.stringify(result.content)).toContain('not allowed in the sandbox')

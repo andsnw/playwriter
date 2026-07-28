@@ -1537,6 +1537,22 @@ export class PlaywrightExecutor {
       })
 
 
+      const sandboxedGetBuiltinModule = (id: string) => {
+        if (!ALLOWED_MODULES.has(id)) {
+          throw Object.assign(
+            new Error(
+              `Module "${id}" is not allowed in the sandbox. ` +
+                `Only safe Node.js built-ins are permitted: ${[...ALLOWED_MODULES].filter((m) => !m.startsWith('node:')).join(', ')}`,
+            ),
+            { name: 'ModuleNotAllowedError' },
+          )
+        }
+        if (id === 'fs' || id === 'node:fs') {
+          return self.scopedFs
+        }
+        return process.getBuiltinModule(id)
+      }
+
       let vmContextObj: any = {
         page,
         context,
@@ -1593,7 +1609,9 @@ export class PlaywrightExecutor {
           return { page: newPage, context: newContext }
         },
         require: this.sandboxedRequire,
-        import: (specifier: string) => {
+        // Named importModule instead of import because the import() keyword doesn't work
+        // in vm contexts (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING). This is a regular function.
+        importModule: (specifier: string) => {
           if (!ALLOWED_MODULES.has(specifier)) {
             throw Object.assign(
               new Error(
@@ -1616,27 +1634,25 @@ export class PlaywrightExecutor {
         // - exit() is blocked to prevent killing the relay server
         // - chdir() is blocked to prevent affecting other sessions
         // - getBuiltinModule() is blocked because it bypasses ALLOWED_MODULES (issue #105)
+        //   Uses getOwnPropertyDescriptor trap too, otherwise
+        //   Object.getOwnPropertyDescriptor(process, 'getBuiltinModule').value() bypasses get trap
         process: new Proxy(process, {
           get(target, prop, receiver) {
             if (prop === 'cwd') return () => self.sessionCwd || target.cwd()
             if (prop === 'exit') return () => { throw new Error('process.exit() is not allowed in the sandbox') }
             if (prop === 'chdir') return () => { throw new Error('process.chdir() is not allowed in the sandbox, use a new session with a different cwd instead') }
-            if (prop === 'getBuiltinModule') return (id: string) => {
-              if (!ALLOWED_MODULES.has(id)) {
-                throw Object.assign(
-                  new Error(
-                    `Module "${id}" is not allowed in the sandbox. ` +
-                      `Only safe Node.js built-ins are permitted: ${[...ALLOWED_MODULES].filter((m) => !m.startsWith('node:')).join(', ')}`,
-                  ),
-                  { name: 'ModuleNotAllowedError' },
-                )
-              }
-              if (id === 'fs' || id === 'node:fs') {
-                return self.scopedFs
-              }
-              return process.getBuiltinModule(id)
-            }
+            if (prop === 'getBuiltinModule') return sandboxedGetBuiltinModule
             return Reflect.get(target, prop, receiver)
+          },
+          // Prevent Object.getOwnPropertyDescriptor(process, 'getBuiltinModule').value()
+          // from bypassing the Proxy get trap
+          getOwnPropertyDescriptor(target, prop) {
+            const desc = Object.getOwnPropertyDescriptor(target, prop)
+            if (!desc) return desc
+            if (prop === 'getBuiltinModule') {
+              return { ...desc, value: sandboxedGetBuiltinModule }
+            }
+            return desc
           },
         }),
       }
