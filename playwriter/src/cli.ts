@@ -416,7 +416,8 @@ cli
           console.error(`Error: ${response.status} ${text}`)
           process.exit(1)
         }
-        const result = (await response.json()) as { id: string }
+        const result = (await response.json()) as { id: string; warning?: string | null }
+        printSessionWarning(result)
         console.log(`Session ${result.id} created (headless). Use with: playwriter -s ${result.id} -e "..."`)
         console.log(pc.dim('NOTE: Recording unavailable in headless mode.'))
       } catch (error: any) {
@@ -451,6 +452,7 @@ cli
       await ensureRelayForSessionCreation(isLocal)
       const serverUrl = await getServerUrl(options.host)
       const result = await createDirectSession({ serverUrl, cdpEndpoint, token: options.token })
+      printSessionWarning(result)
       console.log(`Session ${result.id} created (direct CDP). Use with: playwriter -s ${result.id} -e "..."`)
       console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
       return
@@ -481,6 +483,7 @@ cli
         const instance = instances[0]
         const serverUrl = await getServerUrl(options.host)
         const result = await createDirectSession({ serverUrl, cdpEndpoint: instance.wsUrl, browser: instance.browser, profiles: instance.profiles, token: options.token })
+        printSessionWarning(result)
         const profileLabel = formatInstanceProfiles(instance)
         console.log(
           `Session ${result.id} created (direct CDP, ${instance.browser}${profileLabel}). Use with: playwriter -s ${result.id} -e "..."`,
@@ -506,6 +509,7 @@ cli
         }
         const serverUrl = await getServerUrl(options.host)
         const result = await createDirectSession({ serverUrl, cdpEndpoint: selected.wsUrl!, browser: selected.browser, profiles: selected.profiles, token: options.token })
+        printSessionWarning(result)
         console.log(`Session ${result.id} created (direct CDP). Use with: playwriter -s ${result.id} -e "..."`)
         console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
         return
@@ -623,7 +627,8 @@ cli
           console.error(`Error: ${response.status} ${text}`)
           process.exit(1)
         }
-        const result = (await response.json()) as { id: string; extensionId: string | null }
+        const result = (await response.json()) as { id: string; extensionId: string | null; warning?: string | null }
+        printSessionWarning(result)
         console.log(`Session ${result.id} created. Use with: playwriter -s ${result.id} -e "..."`)
         printCloudTip()
       } catch (error: any) {
@@ -695,6 +700,7 @@ cli
           }
         } else if (selected.type === 'direct') {
           const result = await createDirectSession({ serverUrl, cdpEndpoint: selected.wsUrl!, browser: selected.browser, profiles: selected.profiles, token: options.token })
+          printSessionWarning(result)
           console.log(`Session ${result.id} created (direct CDP). Use with: playwriter -s ${result.id} -e "..."`)
           console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
         } else {
@@ -709,7 +715,8 @@ cli
             console.error(`Error: ${response.status} ${text}`)
             process.exit(1)
           }
-          const result = (await response.json()) as { id: string }
+          const result = (await response.json()) as { id: string; warning?: string | null }
+          printSessionWarning(result)
           console.log(`Session ${result.id} created. Use with: playwriter -s ${result.id} -e "..."`)
           printCloudTip()
         }
@@ -745,7 +752,7 @@ async function createDirectSession({
   browser?: string
   profiles?: Array<{ name: string; email: string }>
   token?: string
-}): Promise<{ id: string }> {
+}): Promise<{ id: string; warning?: string | null }> {
   const cwd = process.cwd()
   const response = await fetch(`${serverUrl}/cli/session/new`, {
     method: 'POST',
@@ -756,7 +763,7 @@ async function createDirectSession({
     const text = await response.text()
     throw new Error(`${response.status} ${text}`)
   }
-  return (await response.json()) as { id: string }
+  return (await response.json()) as { id: string; warning?: string | null }
 }
 
 function instanceToBrowserOption(instance: DiscoveredInstance): BrowserOption {
@@ -866,6 +873,13 @@ async function handleCloudBrowserNotFound(browserKey: string, { hasCloudOptions 
     }
   }
   process.exit(1)
+}
+
+/** Print a warning from the relay's session new response if present. */
+function printSessionWarning(result: { warning?: string | null }): void {
+  if (result.warning) {
+    console.error(pc.yellow(`Warning: ${result.warning}`))
+  }
 }
 
 function printCloudTip(): void {

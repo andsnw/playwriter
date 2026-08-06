@@ -46,6 +46,77 @@ const __dirname = path.dirname(__filename)
 
 const require = createRequire(import.meta.url)
 
+/**
+ * Check if a path looks like a Windows absolute path (e.g. C:\Users or D:/foo).
+ * Works on any platform — uses a regex instead of path.isAbsolute() which is
+ * platform-dependent.
+ */
+export function isWindowsAbsolutePath(p: string): boolean {
+  return /^[A-Za-z]:[/\\]/.test(p)
+}
+
+/**
+ * On POSIX, attempt to translate a Windows absolute path to its WSL mount equivalent.
+ * E.g. C:\Users\me\project → /mnt/c/Users/me/project.
+ * Returns null if the current platform is Windows (no translation needed),
+ * if the path isn't a Windows path, or if the WSL mount point doesn't exist.
+ */
+export function tryTranslateWindowsPathToWSL(windowsPath: string): string | null {
+  if (process.platform === 'win32') {
+    return null
+  }
+  if (!isWindowsAbsolutePath(windowsPath)) {
+    return null
+  }
+  const driveLetter = windowsPath[0].toLowerCase()
+  const mountPoint = `/mnt/${driveLetter}`
+  if (!fs.existsSync(mountPoint)) {
+    return null
+  }
+  // Strip drive letter + colon, normalize backslashes to forward slashes
+  const relativePart = windowsPath.slice(2).replace(/\\/g, '/')
+  return path.posix.join(mountPoint, relativePart)
+}
+
+/**
+ * Resolve a session cwd that may have come from a different OS.
+ * Returns { cwd, warning } where cwd is the resolved absolute path (or null
+ * if unusable) and warning is a user-facing message if translation was needed
+ * or the path was rejected.
+ */
+export function resolveSessionCwd(rawCwd: string | undefined): { cwd: string | null; warning: string | null } {
+  if (!rawCwd) {
+    return { cwd: null, warning: null }
+  }
+
+  // If the path is already absolute on this platform, use it directly
+  if (path.isAbsolute(rawCwd)) {
+    return { cwd: path.resolve(rawCwd), warning: null }
+  }
+
+  // On POSIX receiving a Windows path: try WSL translation
+  if (isWindowsAbsolutePath(rawCwd)) {
+    const translated = tryTranslateWindowsPathToWSL(rawCwd)
+    if (translated) {
+      return {
+        cwd: translated,
+        warning: `CLI cwd '${rawCwd}' is a Windows path. Translated to WSL mount: ${translated}`,
+      }
+    }
+    return {
+      cwd: null,
+      warning: `CLI cwd '${rawCwd}' is a Windows path but no WSL mount found at /mnt/${rawCwd[0].toLowerCase()}. Session fs will be scoped to /tmp only.`,
+    }
+  }
+
+  // Path is relative on this platform and not a Windows path — shouldn't happen
+  // in normal usage but guard against mangled paths
+  return {
+    cwd: null,
+    warning: `CLI cwd '${rawCwd}' is not an absolute path on this platform. Session fs will be scoped to /tmp only.`,
+  }
+}
+
 export class CodeExecutionTimeoutError extends Error {
   constructor(timeout: number) {
     super(`Code execution timed out after ${timeout}ms`)
@@ -378,7 +449,15 @@ export class PlaywrightExecutor {
     this.cdpConfig = options.cdpConfig
     this.logger = options.logger || { log: console.log, error: console.error }
     this.sessionMetadata = options.sessionMetadata || { extensionId: null, browser: null, profile: null }
-    this.sessionCwd = options.cwd ? path.resolve(options.cwd) : null
+    // Resolve cwd with cross-OS awareness (Windows CLI + Linux relay via WSL).
+    // resolveSessionCwd handles WSL /mnt/ translation and rejects paths that
+    // can't be resolved on the relay's platform to prevent mangled paths like
+    // /home/user/C:\Users\... (see issue #107).
+    const { cwd: resolvedCwd, warning: cwdWarning } = resolveSessionCwd(options.cwd)
+    this.sessionCwd = resolvedCwd
+    if (cwdWarning) {
+      this.logger.log(`[session cwd] ${cwdWarning}`)
+    }
     this.cloudSession = options.cloudSession || null
     // ScopedFS expects an array of allowed directories. If cwd is provided, use it; otherwise use defaults.
     this.scopedFs = new ScopedFS(

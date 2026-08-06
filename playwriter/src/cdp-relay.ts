@@ -2083,7 +2083,14 @@ export async function startPlayWriterCDPRelayServer({
       }
     }
     const sessionId = String(nextSessionNumber++)
-    const cwd = body.cwd
+    // Resolve cwd with cross-OS awareness: if CLI runs on Windows and relay on
+    // Linux (WSL), translate the Windows path to /mnt/<drive>/... so the sandbox
+    // can actually reach it. See issue #107.
+    const { resolveSessionCwd } = await import('./executor.js')
+    const { cwd, warning: cwdWarning } = resolveSessionCwd(body.cwd)
+    if (cwdWarning) {
+      logger?.log(`[session ${sessionId}] ${cwdWarning}`)
+    }
 
     // Headless mode: launch Chrome via chromium.launch(), no extension needed.
     // Force connection immediately so missing Chrome errors surface at creation time,
@@ -2092,7 +2099,7 @@ export async function startPlayWriterCDPRelayServer({
       const manager = await getExecutorManager()
       const executor = manager.getExecutor({
         sessionId,
-        cwd,
+        cwd: cwd || undefined,
         cdpConfig: { headless: true },
         sessionMetadata: {
           extensionId: null,
@@ -2113,6 +2120,7 @@ export async function startPlayWriterCDPRelayServer({
         extensionId: metadata.extensionId,
         browser: metadata.browser,
         profile: metadata.profile,
+        warning: cwdWarning,
       })
     }
 
@@ -2129,7 +2137,7 @@ export async function startPlayWriterCDPRelayServer({
       const manager = await getExecutorManager()
       const executor = manager.getExecutor({
         sessionId,
-        cwd,
+        cwd: cwd || undefined,
         cdpConfig: { directCdpUrl: appendSessionToWsUrl(body.cdpEndpoint, sessionId) },
         sessionMetadata: {
           extensionId: null,
@@ -2159,6 +2167,7 @@ export async function startPlayWriterCDPRelayServer({
         extensionId: metadata.extensionId,
         browser: metadata.browser,
         profile: metadata.profile,
+        warning: cwdWarning,
       })
     }
 
@@ -2175,7 +2184,7 @@ export async function startPlayWriterCDPRelayServer({
     const manager = await getExecutorManager()
     const executor = manager.getExecutor({
       sessionId,
-      cwd,
+      cwd: cwd || undefined,
       sessionMetadata: {
         extensionId: conn.stableKey,
         browser: conn.info.browser || null,
@@ -2189,6 +2198,7 @@ export async function startPlayWriterCDPRelayServer({
       extensionId: metadata.extensionId,
       browser: metadata.browser,
       profile: metadata.profile,
+      warning: cwdWarning,
     })
   })
 
