@@ -422,6 +422,14 @@ export function initPlaywriterToolbar(): void {
     }
   }
 
+  // Prevent shift+click text selection and other default mousedown behavior
+  // while in pin mode. The click handler's preventDefault is too late because
+  // the browser starts selection on mousedown, not click.
+  function onMouseDown(e: MouseEvent): void {
+    if (isOverToolbar(e)) return
+    e.preventDefault()
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') setPinMode(false)
   }
@@ -439,6 +447,7 @@ export function initPlaywriterToolbar(): void {
       accumulatedPins = []
       document.documentElement.style.cursor = 'crosshair'
       getOverlay() // ensure overlay element exists in DOM
+      document.addEventListener('mousedown', onMouseDown, true)
       document.addEventListener('mousemove', onMouseMove, { capture: true, passive: true })
       document.addEventListener('click', onClick, true)
       document.addEventListener('keydown', onKeyDown, true)
@@ -446,6 +455,7 @@ export function initPlaywriterToolbar(): void {
       clearAccumulatedOutlines()
       document.documentElement.style.cursor = ''
       hideOverlay()
+      document.removeEventListener('mousedown', onMouseDown, true)
       document.removeEventListener('mousemove', onMouseMove, true)
       document.removeEventListener('click', onClick, true)
       document.removeEventListener('keydown', onKeyDown, true)
