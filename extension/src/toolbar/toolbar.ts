@@ -35,6 +35,11 @@ export function initPlaywriterToolbar(): void {
   let overlayEl: HTMLDivElement | null = null
   // Declared here so the hoisted setPinMode can reference it before assignment.
   let pinBtn!: HTMLButtonElement
+  // Shift-click multi-select: accumulated pins while pin mode stays active.
+  // Each entry tracks the pin number and element so we can build a combined
+  // clipboard string and clear persistent outlines when pin mode exits.
+  let accumulatedPins: { n: number; element: Element; prevOutline: string; prevOffset: string }[] =
+    []
 
   // ── Create shadow-DOM host ─────────────────────────────────────────────────
 
@@ -271,17 +276,30 @@ export function initPlaywriterToolbar(): void {
 
   // ── Helper: flash green outline on a pinned element ────────────────────────
 
-  function flashElement(el: Element): void {
+  function flashElement(el: Element, persistent = false): { prevOutline: string; prevOffset: string } {
     const s = (el as HTMLElement).style
-    if (!s) return
-    const prevOutline = s.outline
-    const prevOffset = s.outlineOffset
+    const prevOutline = s?.outline || ''
+    const prevOffset = s?.outlineOffset || ''
+    if (!s) return { prevOutline, prevOffset }
     s.outline = '1px solid #22c55e'
     s.outlineOffset = '2px'
-    window.setTimeout(() => {
-      s.outline = prevOutline
-      s.outlineOffset = prevOffset
-    }, 350)
+    if (!persistent) {
+      window.setTimeout(() => {
+        s.outline = prevOutline
+        s.outlineOffset = prevOffset
+      }, 350)
+    }
+    return { prevOutline, prevOffset }
+  }
+
+  function clearAccumulatedOutlines(): void {
+    for (const pin of accumulatedPins) {
+      const s = (pin.element as HTMLElement).style
+      if (!s) continue
+      s.outline = pin.prevOutline
+      s.outlineOffset = pin.prevOffset
+    }
+    accumulatedPins = []
   }
 
   // ── Helper: copy text to clipboard with execCommand fallback ───────────────
@@ -348,16 +366,60 @@ export function initPlaywriterToolbar(): void {
     const name = allocatePinName()
     const n = pinCount
     window[name] = target
-
-    flashElement(target)
-
-    // Copy only the command so pasting it into a shell or agent prompt stays compact.
     const url = location.href
-    const code = buildInspectionCode(n, url)
-    const clipboardText = "playwriter -e '" + code + "'"
-    copyText(clipboardText)
-    showToast('Copied playwriter element reference, use it in your agent prompt', target.getBoundingClientRect())
-    setPinMode(false)
+
+    if (e.shiftKey) {
+      // Shift-click: accumulate this element, keep pin mode active.
+      // Skip duplicate elements so re-clicking the same element doesn't
+      // save an already-green outline as the "original" style.
+      const alreadyPinned = accumulatedPins.some((p) => p.element === target)
+      if (!alreadyPinned) {
+        const saved = flashElement(target, true)
+        accumulatedPins.push({ n, element: target, ...saved })
+      }
+      const clipboardText = accumulatedPins
+        .map((p) => {
+          return "playwriter -e '" + buildInspectionCode(p.n, url) + "'"
+        })
+        .join(',\n')
+      copyText(clipboardText)
+      showToast(
+        `Copied ${accumulatedPins.length} element references (shift+click to add more)`,
+        target.getBoundingClientRect(),
+      )
+    } else {
+      // Normal click: include any accumulated pins, then exit pin mode.
+      // Clear persistent outlines before the temporary flash so the
+      // flash doesn't save green as the "previous" outline to restore.
+      const rect = target.getBoundingClientRect()
+      const alreadyPinned = accumulatedPins.some((p) => p.element === target)
+      const allPins = alreadyPinned
+        ? accumulatedPins
+        : [...accumulatedPins, { n, element: target, prevOutline: '', prevOffset: '' }]
+      clearAccumulatedOutlines()
+      flashElement(target)
+      if (allPins.length > 1) {
+        const clipboardText = allPins
+          .map((p) => {
+            return "playwriter -e '" + buildInspectionCode(p.n, url) + "'"
+          })
+          .join(',\n')
+        copyText(clipboardText)
+        showToast(
+          `Copied ${allPins.length} element references, use them in your agent prompt`,
+          rect,
+        )
+      } else {
+        const code = buildInspectionCode(n, url)
+        const clipboardText = "playwriter -e '" + code + "'"
+        copyText(clipboardText)
+        showToast(
+          'Copied playwriter element reference, use it in your agent prompt',
+          rect,
+        )
+      }
+      setPinMode(false)
+    }
   }
 
   function onKeyDown(e: KeyboardEvent): void {
@@ -374,12 +436,14 @@ export function initPlaywriterToolbar(): void {
     pinBtn.classList.toggle('active', on)
 
     if (on) {
+      accumulatedPins = []
       document.documentElement.style.cursor = 'crosshair'
       getOverlay() // ensure overlay element exists in DOM
       document.addEventListener('mousemove', onMouseMove, { capture: true, passive: true })
       document.addEventListener('click', onClick, true)
       document.addEventListener('keydown', onKeyDown, true)
     } else {
+      clearAccumulatedOutlines()
       document.documentElement.style.cursor = ''
       hideOverlay()
       document.removeEventListener('mousemove', onMouseMove, true)
