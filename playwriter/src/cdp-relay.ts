@@ -820,7 +820,7 @@ export async function startPlayWriterCDPRelayServer({
       }
 
       case 'Page.captureScreenshot': {
-        // Hide playwriter UI elements, scrollbars, and blinking caret during screenshots
+        // Hide playwriter UI, scrollbars, caret during screenshots (2 blocking + 1 fire-and-forget round trips)
         const screenshotSessionId = sessionId
         const addClassExpr = `(() => {
           const id = '__playwriter_screenshot_style__';
@@ -840,41 +840,24 @@ export async function startPlayWriterCDPRelayServer({
           }
           document.documentElement.classList.add('playwriter-screenshot');
         })()`
-        const removeClassExpr = `document.documentElement.classList.remove('playwriter-screenshot')`
 
-        try {
-          await sendToExtension({
-            extensionId: resolvedExtensionId,
-            method: 'forwardCDPCommand',
-            params: {
-              sessionId: screenshotSessionId,
-              method: 'Runtime.evaluate',
-              params: { expression: addClassExpr },
-              source,
-            },
-          })
-          const result = await sendToExtension({
-            extensionId: resolvedExtensionId,
-            method: 'forwardCDPCommand',
-            params: { sessionId: screenshotSessionId, method, params, source },
-          })
-          return result
-        } finally {
-          try {
-            await sendToExtension({
-              extensionId: resolvedExtensionId,
-              method: 'forwardCDPCommand',
-              params: {
-                sessionId: screenshotSessionId,
-                method: 'Runtime.evaluate',
-                params: { expression: removeClassExpr },
-                source,
-              },
-            })
-          } catch {
-            // cleanup is best-effort; page may have navigated away
-          }
-        }
+        const evalCmd = (expression: string) => ({
+          extensionId: resolvedExtensionId,
+          method: 'forwardCDPCommand' as const,
+          params: { sessionId: screenshotSessionId, method: 'Runtime.evaluate', params: { expression }, source },
+        })
+
+        // 1. add class (must complete before capture)
+        await sendToExtension(evalCmd(addClassExpr))
+        // 2. capture screenshot
+        const result = await sendToExtension({
+          extensionId: resolvedExtensionId,
+          method: 'forwardCDPCommand',
+          params: { sessionId: screenshotSessionId, method, params, source },
+        })
+        // 3. remove class (fire-and-forget; Playwright serializes screenshots so no race)
+        sendToExtension(evalCmd(`document.documentElement.classList.remove('playwriter-screenshot')`)).catch(() => {})
+        return result
       }
 
       case 'Runtime.enable': {
