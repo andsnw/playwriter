@@ -819,6 +819,59 @@ export async function startPlayWriterCDPRelayServer({
         })
       }
 
+      case 'Page.captureScreenshot': {
+        // Hide playwriter UI elements, scrollbars, and blinking caret during screenshots
+        const screenshotSessionId = sessionId
+        const addClassExpr = `(() => {
+          const id = '__playwriter_screenshot_style__';
+          if (!document.getElementById(id)) {
+            const s = document.createElement('style');
+            s.id = id;
+            s.textContent = [
+              'html.playwriter-screenshot [data-playwriter-toolbar],',
+              'html.playwriter-screenshot [data-playwriter-overlay],',
+              'html.playwriter-screenshot #__playwriter_ghost_cursor__ { display: none !important; }',
+              'html.playwriter-screenshot { scrollbar-width: none !important; }',
+              'html.playwriter-screenshot::-webkit-scrollbar { display: none !important; }',
+              'html.playwriter-screenshot *::-webkit-scrollbar { display: none !important; }',
+              'html.playwriter-screenshot * { scrollbar-width: none !important; caret-color: transparent !important; }',
+            ].join('\\n');
+            document.head.appendChild(s);
+          }
+          document.documentElement.classList.add('playwriter-screenshot');
+        })()`
+        const removeClassExpr = `document.documentElement.classList.remove('playwriter-screenshot')`
+
+        try {
+          await sendToExtension({
+            extensionId: resolvedExtensionId,
+            method: 'forwardCDPCommand',
+            params: {
+              sessionId: screenshotSessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: addClassExpr },
+              source,
+            },
+          })
+          return await sendToExtension({
+            extensionId: resolvedExtensionId,
+            method: 'forwardCDPCommand',
+            params: { sessionId: screenshotSessionId, method, params, source },
+          })
+        } finally {
+          sendToExtension({
+            extensionId: resolvedExtensionId,
+            method: 'forwardCDPCommand',
+            params: {
+              sessionId: screenshotSessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: removeClassExpr },
+              source,
+            },
+          }).catch(() => {})
+        }
+      }
+
       case 'Runtime.enable': {
         if (!sessionId) {
           break
