@@ -836,7 +836,7 @@ export async function startPlayWriterCDPRelayServer({
               'html.playwriter-screenshot *::-webkit-scrollbar { display: none !important; }',
               'html.playwriter-screenshot * { scrollbar-width: none !important; caret-color: transparent !important; }',
             ].join('\\n');
-            document.head.appendChild(s);
+            (document.head || document.documentElement).appendChild(s);
           }
           document.documentElement.classList.add('playwriter-screenshot');
         })()`
@@ -853,22 +853,27 @@ export async function startPlayWriterCDPRelayServer({
               source,
             },
           })
-          return await sendToExtension({
+          const result = await sendToExtension({
             extensionId: resolvedExtensionId,
             method: 'forwardCDPCommand',
             params: { sessionId: screenshotSessionId, method, params, source },
           })
+          return result
         } finally {
-          sendToExtension({
-            extensionId: resolvedExtensionId,
-            method: 'forwardCDPCommand',
-            params: {
-              sessionId: screenshotSessionId,
-              method: 'Runtime.evaluate',
-              params: { expression: removeClassExpr },
-              source,
-            },
-          }).catch(() => {})
+          try {
+            await sendToExtension({
+              extensionId: resolvedExtensionId,
+              method: 'forwardCDPCommand',
+              params: {
+                sessionId: screenshotSessionId,
+                method: 'Runtime.evaluate',
+                params: { expression: removeClassExpr },
+                source,
+              },
+            })
+          } catch {
+            // cleanup is best-effort; page may have navigated away
+          }
         }
       }
 
