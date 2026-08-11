@@ -855,8 +855,8 @@ export async function startPlayWriterCDPRelayServer({
           method: 'forwardCDPCommand',
           params: { sessionId: screenshotSessionId, method, params, source },
         })
-        // 3. remove class (fire-and-forget; Playwright serializes screenshots so no race)
-        sendToExtension(evalCmd(`document.documentElement.classList.remove('playwriter-screenshot')`)).catch(() => {})
+        // 3. remove class
+        await sendToExtension(evalCmd(`document.documentElement.classList.remove('playwriter-screenshot')`)).catch(() => {})
         return result
       }
 
