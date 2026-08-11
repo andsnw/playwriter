@@ -995,8 +995,30 @@ export async function getAriaSnapshot({
     }
   }
 
-  await session.send('DOM.enable', undefined, oopifSessionId)
-  await session.send('Accessibility.enable', undefined, oopifSessionId)
+  await Promise.all([
+    session.send('DOM.enable', undefined, oopifSessionId),
+    session.send('Accessibility.enable', undefined, oopifSessionId),
+    // Blink updates its AX cache during rendering, after framework navigation changes the DOM.
+    (resolvedFrame || page).evaluate(() => {
+      return new Promise<void>((resolve) => {
+        const window = document.defaultView
+        if (!window) {
+          resolve()
+          return
+        }
+        if (document.visibilityState !== 'visible') {
+          document.documentElement.getBoundingClientRect()
+          resolve()
+          return
+        }
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            resolve()
+          })
+        })
+      })
+    }),
+  ])
   const scopeAttr = 'data-pw-scope'
   const scopeValue = crypto.randomUUID()
   let scopeApplied = false
