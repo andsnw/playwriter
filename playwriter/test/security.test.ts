@@ -3,6 +3,7 @@ import { startPlayWriterCDPRelayServer } from '../src/cdp-relay.js'
 import { WebSocket } from 'ws'
 import { createFileLogger } from '../src/create-logger.js'
 import { killPortProcess } from '../src/kill-port.js'
+import { createMCPClient } from '../src/mcp-client.js'
 
 const TEST_PORT = 19999
 
@@ -65,6 +66,17 @@ describe('Security Tests', () => {
 
     // 3. Correct token -> Should succeed
     await expect(tryConnect(token)).resolves.not.toThrow()
+  })
+
+  it('starts the MCP against a token-protected remote relay', async () => {
+    const token = 'secret-token'
+    server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, token })
+
+    const mcp = await createMCPClient({
+      args: ['--host', `http://0.0.0.0:${TEST_PORT}`, '--token', token],
+    })
+
+    await mcp.cleanup()
   })
 
   it('should enforce localhost restrictions for /extension endpoint', async () => {

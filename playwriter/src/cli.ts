@@ -1374,9 +1374,9 @@ cli
 cli
   .command(
     'serve',
-    `Start the relay server on this machine (must be the same host where Chrome is running). Remote clients (Docker, other machines) connect via PLAYWRITER_HOST. Use --host localhost for Docker (no token needed) — containers reach it via host.docker.internal. Use --host 0.0.0.0 for LAN/internet access (requires --token).`,
+    `Start the relay server on this machine (must be the same host where Chrome is running). Remote clients (Docker, other machines) connect via PLAYWRITER_HOST and PLAYWRITER_TOKEN. Use --host 0.0.0.0 for Docker, LAN, or internet access (requires --token).`,
   )
-  .option('--host [host]', z.string().default('0.0.0.0').describe('Host to bind to (use "localhost" for Docker, "0.0.0.0" for remote access)'))
+  .option('--host [host]', z.string().default('0.0.0.0').describe('Host to bind to (use "0.0.0.0" for Docker or remote access)'))
   .option('--token <token>', 'Authentication token, required when --host is 0.0.0.0 (or use PLAYWRITER_TOKEN env var)')
   .option('--replace', 'Kill existing server if running')
   .action(async (options) => {
