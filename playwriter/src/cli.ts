@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { goke, openInBrowser, isAgent } from 'goke'
 import { z } from 'zod'
 import pc from 'picocolors'
+import { Agent, fetch as undiciFetch } from 'undici'
 
 // Prevent Buffers from dumping hex bytes in util.inspect output.
 Buffer.prototype[util.inspect.custom] = function () {
@@ -28,6 +29,7 @@ import { discoverChromeInstances, resolveDirectInput, type DiscoveredInstance } 
 import { getCloudClient, loadCloudAuth, saveCloudAuth, CloudClient, buildLiveUrl } from './cloud-client.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const executeDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 
 const cli = goke('playwriter')
 
@@ -278,10 +280,12 @@ async function executeCode(options: {
   const executeUrl = `${serverUrl}/cli/execute`
 
   try {
-    const response = await fetch(executeUrl, {
+    const response = await undiciFetch(executeUrl, {
       method: 'POST',
       headers: buildAuthHeaders({ token, json: true }),
       body: JSON.stringify({ sessionId, code, timeout, cwd }),
+      dispatcher: executeDispatcher,
+      signal: AbortSignal.timeout(timeout + 30_000),
     })
 
     if (!response.ok) {

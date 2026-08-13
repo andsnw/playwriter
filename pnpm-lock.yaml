@@ -387,6 +387,9 @@ importers:
       strip-ansi:
         specifier: ^7.1.2
         version: 7.1.2
+      undici:
+        specifier: ^7.28.0
+        version: 7.28.0
       ws:
         specifier: ^8.18.3
         version: 8.21.0(bufferutil@4.0.9)
