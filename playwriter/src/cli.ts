@@ -113,6 +113,8 @@ cli
     }
   })
 
+const DEFAULT_EXEC_TIMEOUT = Number(process.env.PLAYWRITER_EXEC_TIMEOUT) || 10000
+
 cli
   .command('', 'Start the MCP server or controls the browser with -e')
   .option('--host <host>', 'Remote relay server host to connect to (or use PLAYWRITER_HOST env var)')
@@ -121,7 +123,7 @@ cli
   .option('-e, --eval <code>', 'Execute JavaScript code and exit, read https://playwriter.dev/SKILL.md for usage')
   .option('-f, --file <path>', 'Execute JavaScript from a file and exit')
   .option('--patchright', 'Use @playwriter/patchright-core for stealth mode (bypasses bot detection)')
-  .option('--timeout [ms]', z.number().default(10000).describe('Execution timeout in milliseconds'))
+  .option('--timeout [ms]', z.number().default(DEFAULT_EXEC_TIMEOUT).describe('Execution timeout in milliseconds'))
   .action(async (options) => {
     if (options.patchright) {
       process.env.PLAYWRITER_PATCHRIGHT = '1'
@@ -151,7 +153,7 @@ cli
     if (code) {
       await executeCode({
         code,
-        timeout: options.timeout || 10000,
+        timeout: options.timeout || DEFAULT_EXEC_TIMEOUT,
         sessionId: options.session,
         host: options.host,
         token: options.token,
