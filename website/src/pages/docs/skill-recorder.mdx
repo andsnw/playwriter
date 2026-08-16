@@ -1,0 +1,249 @@
+---
+$schema: https://holocron.so/frontmatter.json
+title: 'Skill Recorder: Turn Browser Workflows Into Reusable Agent Skills'
+sidebarTitle: Skill Recorder
+description: Record a browser workflow once by hand, and let your agent turn it into a reusable skill with verified Playwright locators, expected outcomes, and importable utils.
+icon: lucide:circle-dot
+---
+
+# Skill Recorder
+
+Some workflows are **easier to show than to explain**: submitting a SaaS to 20 directory
+websites, filling a legacy enterprise form, navigating an internal dashboard with unusual
+UI. Instead of describing every click to your agent, **perform the workflow once** in your
+real browser while Playwriter records everything. Your agent then reads the recording and
+writes a **skill**: a SKILL.md plus a utils script that automates the same flow forever.
+
+<Steps>
+  <Step title='Say "start recording"'>
+    Your agent runs `playwriter recorder start`. From this moment every click, fill,
+    navigation, network request, cookie/storage change, and snapshot diff is captured
+    to a jsonl file.
+  </Step>
+  <Step title='Perform the workflow in your browser'>
+    Use the app like you normally would, in your real Chrome with your real logins.
+    Pauses and dead ends are fine; they get filtered out later.
+  </Step>
+  <Step title='Say "done"'>
+    The agent runs `playwriter recorder stop` and reads the recorded events, verifying
+    each locator against the live page.
+  </Step>
+  <Step title='The agent writes the skill'>
+    It produces a `SKILL.md` plus a `utils.js` with importable functions, then validates
+    the whole flow by replaying it end-to-end.
+  </Step>
+</Steps>
+
+## Why record instead of describe
+
+- **You know the app, the agent doesn't.** Recording captures the exact sequence,
+  including the parts you'd forget to mention ("click the second row, the first is a header").
+- **Real locators, not guesses.** Every action is recorded with the same locator code
+  Playwright's own codegen produces: `await page.getByRole('button', { name: 'Submit' }).click()`.
+- **The agent sees what changed, not just what you clicked.** Each action is linked to
+  the aria snapshot diff, network requests, and cookie/storage changes it caused, so the
+  generated skill knows the **expected outcome** of every step.
+- **Your logins come free.** Recording happens in your real Chrome with your real
+  sessions. No credential handling, no bot walls from a fresh automation browser.
+
+## Quick start
+
+Tell your agent to start recording:
+
+```bash
+playwriter recorder start
+# Recording 1 started on session 1.
+# Events file: ~/.playwriter/recordings/1.jsonl
+# ... prints the full skill-authoring instructions for the agent ...
+```
+
+Perform the workflow in your browser like you normally would. Take your time; pauses and
+mistakes are fine, dead ends get filtered out later. Then tell the agent you're done:
+
+```bash
+playwriter recorder stop
+# Recording 1 stopped. 47 events captured.
+# Events file: ~/.playwriter/recordings/1.jsonl
+```
+
+The agent inspects the events. The default view is a **thin timeline**: heavy payloads
+(response bodies, snapshot diffs) show up as sizes, so reading the whole recording costs
+few tokens:
+
+```bash
+playwriter recorder events 1 | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'
+```
+
+```
+1   0     recording-started   https://directory.example.com
+2   2.1   action              await page.getByRole('link', { name: 'Submit a product' }).click()
+3   2.4   navigation          https://directory.example.com/submit
+4   3.8   action              await page.getByRole('textbox', { name: 'Product name' }).fill('Acme')
+5   5.2   action              await page.getByRole('textbox', { name: 'Website URL' }).fill('https://acme.com')
+6   7.0   action              await page.getByRole('button', { name: 'Submit' }).click()
+7   7.3   network             POST 200 https://directory.example.com/api/products
+8   7.6   snapshot-diff       + text: "Thanks! Your product is under review."
+```
+
+Then it drills into the events that matter, by id:
+
+```bash
+playwriter recorder events 1 7   # full request postData + responseBody of event 7
+```
+
+## What gets recorded
+
+Every event is one JSON line with a timestamp (`t`, seconds since start):
+
+| Event type                    | What it captures                                                                                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `action`                      | Click, fill, press, select — with generated Playwright locator code and an `actionId`                                                                                     |
+| `snapshot-diff`               | How the page's aria snapshot changed after each action                                                                                                                    |
+| `network`                     | Document/XHR/fetch requests: method, url, status, post data, and **response bodies** for JSON/text responses (shown as sizes in the thin view, full content per event id) |
+| `download`                    | File downloads: source url and suggested filename                                                                                                                         |
+| `file-upload`                 | Files chosen in `input[type=file]` elements (file names)                                                                                                                  |
+| `cookies` / `storage`         | Cookie and localStorage/sessionStorage changes (values hashed or truncated)                                                                                               |
+| `navigation` / `url-changed`  | Full navigations and SPA pushState url changes                                                                                                                            |
+| `page-opened` / `page-closed` | Popups and new tabs, with page aliases                                                                                                                                    |
+| `console` / `page-error`      | Console errors/warnings and uncaught page errors                                                                                                                          |
+| `focus` / `scroll` / `signal` | Focus changes, scrolling, navigation signals                                                                                                                              |
+
+State-change events carry `afterActionId`, linking each UI/network/storage change to the
+action that caused it. That's what lets the agent write skills with **verifiable expected
+outcomes** for every step:
+
+```bash
+# everything action 3 caused
+playwriter recorder events 1 | jq 'select(.afterActionId == 3)'
+```
+
+## What the agent produces
+
+The `recorder start` output includes full instructions for the agent: ask you to summarize
+what you did, inspect the events, verify each locator against the live page, ask for the
+skill name and which values should become parameters, then write two files:
+
+**`SKILL.md`** — the high-level flow: preconditions (login state from the recorded cookie
+events), numbered steps with locators, the expected outcome of each step (url change,
+snapshot text, network request), and how to detect success.
+
+**`utils.js`** — importable functions that replay the flow with few tokens:
+
+```js
+export async function submitProduct({ page, name, url }) {
+  await page.goto('https://directory.example.com/submit')
+  await page.getByRole('textbox', { name: 'Product name' }).fill(name)
+  await page.getByRole('textbox', { name: 'Website URL' }).fill(url)
+  await page.getByRole('button', { name: 'Submit' }).click()
+  await page.getByText('Thanks! Your product is under review.').waitFor()
+}
+```
+
+Any agent can then run the whole flow in one command:
+
+```bash
+playwriter -s 1 -e "const { submitProduct } = await import('./skills/submit-to-directory/utils.js'); await submitProduct({ page, name: 'Acme', url: 'https://acme.com' })"
+```
+
+The agent validates the skill by replaying it end-to-end before calling it done.
+
+## Use cases
+
+### Reverse engineer a typed API client
+
+Use a site normally — create a job on Midjourney, run a search, export a report — while the
+recorder captures every fetch/XHR request **and its response body**. The recording reveals
+what no agent can guess: the real request sequence, auth headers via cookies, payload shapes,
+and response schemas. The agent then writes a **fully typed client or CLI** for the site's
+internal API that skips the browser entirely:
+
+```bash
+# the site's API surface, extracted from one recorded session
+playwriter recorder events 1 | jq -r 'select(.type == "network" and .responseBodySize) | [.id, .method, .url, .responseBodySize] | @tsv'
+# then read the full request/response payloads of the interesting endpoints
+playwriter recorder events 1 14 15 22
+```
+
+For streaming or bot-protected sites, the agent keeps the browser but calls the endpoints
+via in-page `fetch`, sharing your cookies and TLS fingerprint.
+
+### CRM data entry
+
+Record one full "create lead → fill 20 fields → assign owner → save" flow in Salesforce or
+HubSpot. CRMs are deep menus, iframes, and modal choreography that are painful to describe
+in words; the recording captures the exact locators (with iframe paths) and the snapshot
+diffs that confirm each step landed. The skill becomes `createLead({ name, email, owner })`
+that any agent calls in one command.
+
+### Bookings driven by incoming messages
+
+Record a booking on your hotel PMS or scheduling tool once: pick dates in the custom
+calendar widget, select room type, set the rate, confirm. Custom date pickers are the
+classic case where described automation fails and recorded locators succeed. Then connect
+the skill to a trigger: an agent reads incoming emails or WhatsApp messages, extracts guest
+name and dates, and calls `createBooking({ guest, checkIn, checkOut, roomType })` —
+verified against the "booking created" network request from the recording.
+
+### Invoice and document harvesting
+
+Once a month someone logs into 15 SaaS billing pages and downloads invoices for accounting.
+Record one round per vendor; the recorded `download` events tie each file to the click that
+produced it, so the agent writes `downloadInvoices({ month })` per vendor. The same pattern
+covers bank statements, shipping labels, and result PDFs from healthcare or government
+portals.
+
+### Internal admin panel operations
+
+Every company has a crusty internal tool: refund a user, extend a trial, toggle a feature
+flag, merge duplicate accounts. Record each operation once and commit a skills folder to
+the repo — the whole team's agents can now perform them, and the recording doubles as
+living documentation. Mutations are verified through the recorded network status codes.
+
+### Repeat submissions
+
+Submit your SaaS to directory sites, cross-post to multiple platforms, file recurring
+reports. Record one submission — including logo uploads, captured as `file-upload` events —
+and replay it for every launch, adapting locators per site while reusing the flow shape.
+
+### Legacy and enterprise apps
+
+EHRs, payer portals, ERPs, government form wizards: no APIs, unusual UI patterns, strict
+field ordering, session timeouts. These flows are far easier to show than to explain. The
+recording captures hidden dependencies too — like a field that only appears after another
+is filled, visible in the snapshot diffs.
+
+### E2E tests from a manual QA pass
+
+A QA person clicks through a critical flow once; the agent turns the recording into a
+Playwright test. Better than codegen alone, because the recording also contains the
+**expected outcomes** — aria diffs become assertions, network status codes become response
+checks.
+
+### Bug reproduction reports
+
+A user hits a bug: "start recording", reproduce it, "done". The event stream — actions,
+network failures, `console` errors, `page-error` events — is a complete repro report an
+agent can replay and debug against.
+
+### Fixing broken skills
+
+When a site redesign breaks a skill, re-record the flow. The agent diffs the new locators
+against the old utils file and updates only the selectors that changed, keeping the
+working parts untouched.
+
+## Notes
+
+- Recording runs inside the **relay daemon**, so it keeps recording after the CLI exits
+  and survives until you stop it.
+- Events persist in `~/.playwriter/recordings/<id>.jsonl` (readable only by your user).
+  Cookie values are never stored; storage values and request bodies are truncated.
+- Works with multiple tabs and popups: actions carry page aliases so the agent knows
+  which page each step targets.
+
+<Aside>
+<Tip>
+The best prompt is simple: **"start recording, I'll show you the workflow"**. Everything
+else — questions about skill name, parameters, and location — the agent asks at the right
+time, guided by the instructions `recorder start` prints.
+</Tip>
+</Aside>
