@@ -43,37 +43,37 @@ every event has a sequential `id`. The default output is a **thin timeline**: he
 payloads (network bodies, snapshot diffs, storage values) are replaced by sizes or key
 lists so the full timeline is cheap to read. Pass event ids to get the full details of
 specific events. Workflow: skim the thin timeline first, then drill into the few events
-you actually need. The recording `<id>` can be omitted: `playwriter recorder events`
-defaults to the latest recording.
+you actually need. `recorder events` targets the latest recording by default; pass
+`-r <recordingId>` to read an older one.
 
 ```bash
 # thin timeline: id, time, type, and the most relevant field per event
-playwriter recorder events <id> | jq -r '[.id, .t, .type, (.code // .url // .signal // .kind // empty)] | @tsv'
+playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // .signal // .kind // empty)] | @tsv'
 
 # full details of specific events (untruncated bodies, full snapshot diffs)
-playwriter recorder events <id> 4 7 12
+playwriter recorder events 4 7 12
 
 # state changes caused by action 3 (snapshot diff, cookies, storage, focus)
-playwriter recorder events <id> | jq 'select(.afterActionId == 3)'
+playwriter recorder events | jq 'select(.afterActionId == 3)'
 
 # only the recorded actions with their locator code
-playwriter recorder events <id> | jq -r 'select(.type == "action") | .code'
+playwriter recorder events | jq -r 'select(.type == "action") | .code'
 
 # find the site's JSON APIs: thin view shows sizes, then drill into the ids
-playwriter recorder events <id> | jq -r 'select(.type == "network" and .responseBodySize) | [.id, .method, .status, .url, .responseBodySize] | @tsv'
-playwriter recorder events <id> 14 15   # → full request postData + responseBody
+playwriter recorder events | jq -r 'select(.type == "network" and .responseBodySize) | [.id, .method, .status, .url, .responseBodySize] | @tsv'
+playwriter recorder events 14 15        # → full request postData + responseBody
 
 # downloads, uploads, console errors
-playwriter recorder events <id> | jq 'select(.type == "download" or .type == "file-upload" or .type == "console" or .type == "page-error")'
+playwriter recorder events | jq 'select(.type == "download" or .type == "file-upload" or .type == "console" or .type == "page-error")'
 
 # cookie / storage changes (login state, tokens, feature flags)
-playwriter recorder events <id> | jq 'select(.type == "cookies" or .type == "storage")'
+playwriter recorder events | jq 'select(.type == "cookies" or .type == "storage")'
 
 # snapshot-diff previews are in the thin view; drill into an id for the full diff
-playwriter recorder events <id> | jq -r 'select(.type == "snapshot-diff") | [.id, .preview] | @tsv'
+playwriter recorder events | jq -r 'select(.type == "snapshot-diff") | [.id, .preview] | @tsv'
 
 # escape hatch: full fidelity for the whole timeline (can be very large)
-playwriter recorder events <id> --full
+playwriter recorder events --full
 ```
 
 Event types: `recording-started`, `action` (with `.code` = playwright locator code like

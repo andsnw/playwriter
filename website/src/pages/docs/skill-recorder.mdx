@@ -71,7 +71,7 @@ The agent inspects the events. The default view is a **thin timeline**: heavy pa
 few tokens:
 
 ```bash
-playwriter recorder events 1 | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'
+playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'
 ```
 
 ```
@@ -88,7 +88,7 @@ playwriter recorder events 1 | jq -r '[.id, .t, .type, (.code // .url // empty)]
 Then it drills into the events that matter, by id:
 
 ```bash
-playwriter recorder events 1 7   # full request postData + responseBody of event 7
+playwriter recorder events 7   # full request postData + responseBody of event 7
 ```
 
 ## What gets recorded
@@ -114,7 +114,7 @@ outcomes** for every step:
 
 ```bash
 # everything action 3 caused
-playwriter recorder events 1 | jq 'select(.afterActionId == 3)'
+playwriter recorder events | jq 'select(.afterActionId == 3)'
 ```
 
 ## What the agent produces
@@ -159,9 +159,9 @@ internal API that skips the browser entirely:
 
 ```bash
 # the site's API surface, extracted from one recorded session
-playwriter recorder events 1 | jq -r 'select(.type == "network" and .responseBodySize) | [.id, .method, .url, .responseBodySize] | @tsv'
+playwriter recorder events | jq -r 'select(.type == "network" and .responseBodySize) | [.id, .method, .url, .responseBodySize] | @tsv'
 # then read the full request/response payloads of the interesting endpoints
-playwriter recorder events 1 14 15 22
+playwriter recorder events 14 15 22
 ```
 
 For streaming or bot-protected sites, the agent keeps the browser but calls the endpoints

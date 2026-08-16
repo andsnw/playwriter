@@ -1481,7 +1481,7 @@ cli
       console.log('')
       console.log('Next steps (full instructions were printed by `recorder start`):')
       console.log('  1. Ask the user to summarize what they did and call out anything non-obvious')
-      console.log(`  2. playwriter recorder events ${result.recordingId}    # inspect the recorded events (use jq)`)
+      console.log(`  2. playwriter recorder events    # inspect the recorded events (use jq)`)
       console.log('  3. Verify the recorded locators against the live page (snapshot/exec loop)')
       console.log('  4. Ask for skill name, location, use case, parameters — then write SKILL.md + utils.js')
       console.log('  5. Validate: replay the utils end-to-end with test params before calling it done')
@@ -1493,18 +1493,20 @@ cli
 
 cli
   .command(
-    'recorder events [recordingId] [...eventIds]',
-    'Print recorded events as jsonl. Defaults to the latest recording when no id is passed. Default output is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies, full snapshot diffs).',
+    'recorder events [...eventIds]',
+    'Print recorded events as jsonl. Uses the latest recording unless `--recording` is passed. Default output is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies, full snapshot diffs).',
   )
+  .option('-r, --recording <id>', 'Recording ID (defaults to the latest recording)')
   .option('--host <host>', 'Remote relay server host')
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
   .option('--type <type>', 'Only print events of this type (e.g. action, network, snapshot-diff)')
   .option('--full', 'Print full events for the whole timeline instead of the thin view')
   .example('playwriter recorder events        # latest recording, thin timeline')
-  .example(`playwriter recorder events 1 | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'`)
-  .example('playwriter recorder events 1 4 7   # full details of events 4 and 7')
-  .example('playwriter recorder events 1 --type action')
-  .action(async (recordingId, eventIds, options) => {
+  .example(`playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'`)
+  .example('playwriter recorder events 4 7    # full details of events 4 and 7')
+  .example('playwriter recorder events -r 2 --type action   # actions of recording 2')
+  .action(async (eventIds, options) => {
+    const recordingId = options.recording
     // When defaulting to the latest recording while several recordings are
     // active concurrently, "latest" is ambiguous: warn on stderr (stdout must
     // stay clean jsonl). Best-effort: relay may not be reachable.

@@ -9,7 +9,7 @@ playwriter recorder start        # starts recording user actions (runs in the re
 # ... user performs the workflow manually in the browser ...
 playwriter recorder stop         # stops and prints event count + jsonl file path
 playwriter recorder events       # thin timeline view of the latest recording
-playwriter recorder events <id> 4 7  # full details of events 4 and 7 (bodies, full diffs)
+playwriter recorder events 4 7   # full details of events 4 and 7 (bodies, full diffs)
 playwriter recorder status       # lists active recordings
 ```
 
