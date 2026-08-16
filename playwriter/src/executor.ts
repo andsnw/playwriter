@@ -1688,8 +1688,7 @@ export class PlaywrightExecutor {
           return { page: newPage, context: newContext }
         },
         require: this.sandboxedRequire,
-        // Named importModule instead of import because the import() keyword doesn't work
-        // in vm contexts (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING). This is a regular function.
+        // Restricted alternative to native import() for allowlisted built-ins.
         importModule: (specifier: string) => {
           if (!ALLOWED_MODULES.has(specifier)) {
             throw Object.assign(
@@ -1737,11 +1736,17 @@ export class PlaywrightExecutor {
       }
 
       const vmContext = vm.createContext(vmContextObj)
+      const sandboxEntryPath = path.join(this.sessionCwd || process.cwd(), '.playwriter-eval.js')
       const autoReturnExpr = getAutoReturnExpression(code)
       const wrappedCode = autoReturnExpr !== null
         ? `(async () => { return await (${autoReturnExpr}) })()`
         : `(async () => { ${code} })()`
       const hasExplicitReturn = autoReturnExpr !== null || /\breturn\b/.test(code)
+      // Native imports use normal Node permissions and resolve from the session cwd.
+      const script = new vm.Script(wrappedCode, {
+        filename: sandboxEntryPath,
+        importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+      })
 
       // Track execution timestamps relative to recording start (seconds).
       // Used to identify idle gaps that can be sped up in demo videos.
@@ -1754,7 +1759,7 @@ export class PlaywrightExecutor {
       const result = await (async () => {
         try {
           return await Promise.race([
-            vm.runInContext(wrappedCode, vmContext, { timeout, displayErrors: true }),
+            script.runInContext(vmContext, { timeout, displayErrors: true }),
             new Promise((_, reject) => setTimeout(() => reject(new CodeExecutionTimeoutError(timeout)), timeout)),
           ])
         } finally {

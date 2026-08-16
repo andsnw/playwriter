@@ -1599,7 +1599,7 @@ describe('Relay Core Tests', () => {
     await client.callTool({ name: 'execute', arguments: { code: js`await state.errorTestPage.close(); delete state.errorTestPage;` } })
   }, 30000)
 
-  // Sandbox escape tests (issue #105): process.getBuiltinModule and import()
+  // Sandbox escape tests (issue #105): process.getBuiltinModule and importModule()
   // must respect ALLOWED_MODULES the same way require() does.
   it('should block process.getBuiltinModule for disallowed modules', async () => {
     await ensureConnectedTabForExecute()

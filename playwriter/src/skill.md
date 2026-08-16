@@ -345,10 +345,47 @@ You can collaborate with the user - they can help with captchas, difficult eleme
 - `page` - a default page (may be shared with other agents). Prefer creating your own page and storing it in `state` (see "working with pages")
 - `context` - browser context, access all pages via `context.pages()`
 - `require` - load Node.js modules (e.g., `const fs = require('node:fs')`)
-- `importModule` - async ESM import with same allowlist as `require` (e.g., `const fs = await importModule('node:fs')`). The `import()` keyword does not work in the sandbox; use `importModule()` instead
+- `import()` - use Node.js ESM to load local scripts, packages, and built-ins (e.g., `const helpers = await import('./scripts/helpers.js')`). Relative paths resolve from the session cwd
+- `importModule` - restricted async import for allowlisted Node.js built-ins (e.g., `const fs = await importModule('node:fs')`)
 - Node.js globals: `setTimeout`, `setInterval`, `fetch`, `URL`, `Buffer`, `crypto`, `process`, etc.
 
-**Not available in the sandbox:** `__dirname`, `__filename`, `import()` keyword.
+**Not available in the sandbox:** `__dirname`, `__filename`.
+
+### importing local scripts
+
+Local modules use normal Node.js ESM. Export helper functions from a `.js` or `.mjs` file and pass Playwriter values such as `page` explicitly:
+
+```js
+// scripts/page-helpers.mjs
+export async function getPageInfo({ page }) {
+  return {
+    title: await page.title(),
+    url: page.url(),
+  }
+}
+```
+
+Load the module from the directory where the Playwriter session was created:
+
+```js
+const { getPageInfo } = await import('./scripts/page-helpers.mjs')
+console.log(await getPageInfo({ page }))
+```
+
+Local modules can use static imports and package imports normally:
+
+```js
+// scripts/save-title.mjs
+import fs from 'node:fs/promises'
+import path from 'node:path'
+
+export async function saveTitle({ page, outputPath }) {
+  await fs.mkdir(path.dirname(outputPath), { recursive: true })
+  await fs.writeFile(outputPath, await page.title())
+}
+```
+
+**Security:** Modules loaded with `import()` run with normal Node.js permissions. Only import code you trust. Use sandboxed `require` or `importModule` when you need restricted built-ins and scoped filesystem writes.
 
 **Important:** `state` is **session-isolated** but pages are **shared** across all sessions. See "working with pages" for how to avoid interference.
 
