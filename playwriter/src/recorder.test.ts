@@ -1,4 +1,4 @@
-// End-to-end tests for the `playwriter record` action recording feature:
+// End-to-end tests for the `playwriter recorder` action recording feature:
 // relay /recorder/* endpoints + ActionRecorder jsonl output. Trusted input is
 // dispatched via raw CDP so it goes through the injected recorder exactly
 // like real user interactions.
@@ -20,14 +20,24 @@ const jsonHeaders = { 'Content-Type': 'application/json' }
 
 describe('action recording', () => {
   let testCtx: TestContext | null = null
+  let recordingsDir: string | null = null
 
   beforeAll(async () => {
+    // Isolate recordings in a temp dir so tests never pollute the user's real
+    // ~/.playwriter/recordings (and never collide with a running relay's ids).
+    // The relay runs in-process, so the env var is read by getRecordingsDir().
+    recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-recordings-test-'))
+    process.env.PLAYWRITER_RECORDINGS_DIR = recordingsDir
     testCtx = await setupTestContext({ port: TEST_PORT, tempDirPrefix: 'pw-record-test-', toggleExtension: true })
   }, 600000)
 
   afterAll(async () => {
     await cleanupTestContext(testCtx, null)
     testCtx = null
+    delete process.env.PLAYWRITER_RECORDINGS_DIR
+    if (recordingsDir) {
+      fs.rmSync(recordingsDir, { recursive: true, force: true })
+    }
   })
 
   it('records user actions with locator strings and state changes', async () => {

@@ -1106,7 +1106,7 @@ export class PlaywrightExecutor {
     }
   }
 
-  /** Used by the action recorder (`playwriter record`) to attach
+  /** Used by the action recorder (`playwriter recorder`) to attach
    *  context-level instrumentation. Connects to the browser if needed. */
   async getBrowserContext(): Promise<BrowserContext> {
     const { page } = await this.ensureConnection()

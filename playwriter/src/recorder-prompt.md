@@ -43,7 +43,8 @@ every event has a sequential `id`. The default output is a **thin timeline**: he
 payloads (network bodies, snapshot diffs, storage values) are replaced by sizes or key
 lists so the full timeline is cheap to read. Pass event ids to get the full details of
 specific events. Workflow: skim the thin timeline first, then drill into the few events
-you actually need.
+you actually need. The recording `<id>` can be omitted: `playwriter recorder events`
+defaults to the latest recording.
 
 ```bash
 # thin timeline: id, time, type, and the most relevant field per event

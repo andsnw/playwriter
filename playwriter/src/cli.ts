@@ -1493,32 +1493,61 @@ cli
 
 cli
   .command(
-    'recorder events <recordingId> [...eventIds]',
-    'Print recorded events as jsonl. Default is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies, full snapshot diffs).',
+    'recorder events [recordingId] [...eventIds]',
+    'Print recorded events as jsonl. Defaults to the latest recording when no id is passed. Default output is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies, full snapshot diffs).',
   )
   .option('--host <host>', 'Remote relay server host')
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
   .option('--type <type>', 'Only print events of this type (e.g. action, network, snapshot-diff)')
   .option('--full', 'Print full events for the whole timeline instead of the thin view')
-  .example('playwriter recorder events 1')
+  .example('playwriter recorder events        # latest recording, thin timeline')
   .example(`playwriter recorder events 1 | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'`)
   .example('playwriter recorder events 1 4 7   # full details of events 4 and 7')
   .example('playwriter recorder events 1 --type action')
   .action(async (recordingId, eventIds, options) => {
+    // When defaulting to the latest recording while several recordings are
+    // active concurrently, "latest" is ambiguous: warn on stderr (stdout must
+    // stay clean jsonl). Best-effort: relay may not be reachable.
+    if (!recordingId) {
+      const active = await (async () => {
+        try {
+          const serverUrl = await getServerUrl(options.host)
+          const response = await fetch(`${serverUrl}/recorder/status`, {
+            headers: buildAuthHeaders({ token: options.token }),
+            signal: AbortSignal.timeout(2000),
+          })
+          const { recordings } = (await response.json()) as { recordings: Array<{ recordingId: string }> }
+          return recordings
+        } catch {
+          return []
+        }
+      })()
+      if (active.length > 1) {
+        console.error(
+          `Warning: ${active.length} recordings are active (ids ${active.map((r) => r.recordingId).join(', ')}). Showing the latest one; pass a recording id to choose.`,
+        )
+      }
+    }
     const content: string = await (async () => {
       // Local relay: read the jsonl straight from disk. Remote relay: the file
       // lives on the relay's machine, fetch it over HTTP.
       if (!options.host && !process.env.PLAYWRITER_HOST) {
-        const { recordingFilePath } = await import('./action-recorder.js')
-        const filePath = recordingFilePath(String(recordingId))
+        const { recordingFilePath, latestRecordingId } = await import('./action-recorder.js')
+        // No id → latest recording, mirroring `recorder stop` defaulting
+        const resolvedId = recordingId ? String(recordingId) : latestRecordingId()
+        if (!resolvedId) {
+          console.error(`No recordings found. Start one with 'playwriter recorder start'.`)
+          process.exit(1)
+        }
+        const filePath = recordingFilePath(resolvedId)
         if (!fs.existsSync(filePath)) {
-          console.error(`Recording ${recordingId} not found at ${filePath}`)
+          console.error(`Recording ${resolvedId} not found at ${filePath}`)
           process.exit(1)
         }
         return fs.readFileSync(filePath, 'utf-8')
       }
       const serverUrl = await getServerUrl(options.host)
-      const response = await fetch(`${serverUrl}/recorder/events/${recordingId}`, {
+      const response = await fetch(`${serverUrl}/recorder/events/${recordingId ?? 'latest'}`, {
         headers: buildAuthHeaders({ token: options.token }),
         signal: AbortSignal.timeout(10000),
       })
@@ -1529,6 +1558,11 @@ cli
       return await response.text()
     })()
     const { projectThinEvent } = await import('./action-recorder.js')
+    const invalidIds = (eventIds || []).filter((id) => !/^\d+$/.test(String(id)))
+    if (invalidIds.length > 0) {
+      console.error(`Invalid event ids: ${invalidIds.join(', ')}. Event ids are the numeric 'id' field from the timeline.`)
+      process.exit(1)
+    }
     const requestedIds = new Set((eventIds || []).map((id) => Number(id)))
     const lines = content.split('\n').filter(Boolean)
     for (const line of lines) {

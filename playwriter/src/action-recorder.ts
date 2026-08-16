@@ -1,4 +1,4 @@
-// Action recording for the `playwriter record` CLI feature.
+// Action recording for the `playwriter recorder` CLI feature.
 //
 // Records user interactions (clicks, fills, presses, navigations) plus derived
 // state changes (aria snapshot diffs, network requests, cookie/storage changes,
@@ -33,13 +33,32 @@ import type { BrowserContext, Frame, Page, Request } from '@xmorse/playwright-co
 import { getAriaSnapshot } from './aria-snapshot.js'
 import { createSmartDiff } from './diff-utils.js'
 
-export const RECORDINGS_DIR = path.join(os.homedir(), '.playwriter', 'recordings')
+// Read at call time (not module load) so tests can point recordings at a temp
+// dir via PLAYWRITER_RECORDINGS_DIR without polluting ~/.playwriter
+export function getRecordingsDir(): string {
+  return process.env.PLAYWRITER_RECORDINGS_DIR || path.join(os.homedir(), '.playwriter', 'recordings')
+}
 
 export function recordingFilePath(recordingId: string): string {
   if (!/^\d+$/.test(recordingId)) {
     throw new Error(`Invalid recording id: ${recordingId}`)
   }
-  return path.join(RECORDINGS_DIR, `${recordingId}.jsonl`)
+  return path.join(getRecordingsDir(), `${recordingId}.jsonl`)
+}
+
+/** Highest recording id present on disk, or null when there are no recordings.
+ *  Used to default `recorder events` to the most recent recording. */
+export function latestRecordingId(): string | null {
+  let max = 0
+  try {
+    for (const file of fs.readdirSync(getRecordingsDir())) {
+      const match = file.match(/^(\d+)\.jsonl$/)
+      if (match) {
+        max = Math.max(max, Number(match[1]))
+      }
+    }
+  } catch {}
+  return max > 0 ? String(max) : null
 }
 
 interface RecorderLogger {
@@ -206,6 +225,7 @@ export class ActionRecorder {
 
   // Serialize async captures so jsonl event order matches real order
   private captureChain: Promise<void> = Promise.resolve()
+  private pendingCaptures = 0
 
   private lastSnapshotByPage = new WeakMap<Page, string>()
   private lastCookieState = new Map<string, string>()
@@ -263,8 +283,11 @@ export class ActionRecorder {
   }
 
   async start() {
-    fs.mkdirSync(RECORDINGS_DIR, { recursive: true, mode: 0o700 })
-    fs.writeFileSync(this.filePath, '', { mode: 0o600 })
+    fs.mkdirSync(getRecordingsDir(), { recursive: true, mode: 0o700 })
+    // 'wx' fails with EEXIST instead of truncating: another relay process
+    // (e.g. tests on a different port) may have allocated the same id from the
+    // shared recordings dir. The manager retries with the next id on EEXIST.
+    fs.writeFileSync(this.filePath, '', { mode: 0o600, flag: 'wx' })
 
     const recorderContext = this.context as unknown as RecorderCapableContext
     await recorderContext._enableRecorder(
@@ -336,6 +359,10 @@ export class ActionRecorder {
     // Poll all pages for SPA url changes and wheel scrolling that never
     // produce recorder actions. Cheap: one evaluate per page per interval.
     this.pollTimer = setInterval(() => {
+      // Backpressure: don't stack polls when captures are already backed up
+      if (this.pendingCaptures > 3) {
+        return
+      }
       this.enqueueCapture(() => this.pollPages())
     }, POLL_INTERVAL_MS)
 
@@ -512,6 +539,10 @@ export class ActionRecorder {
       clearTimeout(this.pendingActionTimer)
     }
     this.pendingActionTimer = setTimeout(() => {
+      // Known tradeoff: an actionUpdated arriving after this flush (user pauses
+      // >800ms mid-fill) becomes a second action event with a new actionId for
+      // the same logical fill. Consumers should treat consecutive fills on the
+      // same selector as one step.
       this.flushPendingAction()
     }, ACTION_COALESCE_MS)
   }
@@ -543,13 +574,27 @@ export class ActionRecorder {
     if (this.state === 'stopped') {
       return
     }
+    this.pendingCaptures++
     this.captureChain = this.captureChain.then(async () => {
-      if (this.state === 'stopped') {
-        return
+      try {
+        if (this.state === 'stopped') {
+          return
+        }
+        // Timeout so one hung page.evaluate (crashed tab, blocked renderer)
+        // can't stall all later captures and block stop() forever
+        await Promise.race([
+          task(),
+          new Promise<void>((_, reject) => {
+            setTimeout(() => {
+              reject(new Error('capture timed out after 15s'))
+            }, 15000).unref?.()
+          }),
+        ]).catch((error) => {
+          this.logger.error('[record] capture failed:', error)
+        })
+      } finally {
+        this.pendingCaptures--
       }
-      await task().catch((error) => {
-        this.logger.error('[record] capture failed:', error)
-      })
     })
   }
 
@@ -850,15 +895,7 @@ export class ActionRecordingManager {
   }
 
   private nextRecordingId(): string {
-    let max = 0
-    try {
-      for (const file of fs.readdirSync(RECORDINGS_DIR)) {
-        const match = file.match(/^(\d+)\.jsonl$/)
-        if (match) {
-          max = Math.max(max, Number(match[1]))
-        }
-      }
-    } catch {}
+    let max = Number(latestRecordingId() || 0)
     // Also consider active recordings whose file may not be listed yet
     for (const id of this.recordings.keys()) {
       max = Math.max(max, Number(id) || 0)
@@ -878,25 +915,33 @@ export class ActionRecordingManager {
         409,
       )
     }
-    const recorder = new ActionRecorder({
-      context,
-      sessionId,
-      recordingId: this.nextRecordingId(),
-      logger: this.logger,
-    })
-    // Reserve the id before the first await so concurrent starts can't pick
-    // the same id or bypass the duplicate-session guard
-    this.recordings.set(recorder.recordingId, recorder)
-    recorder.onDidStop = () => {
-      this.recordings.delete(recorder.recordingId)
+    // Retry on EEXIST: another relay process sharing the recordings dir may
+    // allocate the same id concurrently; its file makes the next scan skip it
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const recorder = new ActionRecorder({
+        context,
+        sessionId,
+        recordingId: this.nextRecordingId(),
+        logger: this.logger,
+      })
+      // Reserve the id before the first await so concurrent starts in this
+      // process can't pick the same id or bypass the duplicate-session guard
+      this.recordings.set(recorder.recordingId, recorder)
+      recorder.onDidStop = () => {
+        this.recordings.delete(recorder.recordingId)
+      }
+      try {
+        await recorder.start()
+        return recorder
+      } catch (error) {
+        this.recordings.delete(recorder.recordingId)
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          continue
+        }
+        throw error
+      }
     }
-    try {
-      await recorder.start()
-    } catch (error) {
-      this.recordings.delete(recorder.recordingId)
-      throw error
-    }
-    return recorder
+    throw new RecordingError('Could not allocate a recording id after 20 attempts', 500)
   }
 
   async stop({ recordingId }: { recordingId?: string }): Promise<{ recordingId: string; eventCount: number; filePath: string }> {

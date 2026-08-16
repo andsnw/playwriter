@@ -2381,6 +2381,10 @@ export async function startPlayWriterCDPRelayServer({
           logger: logger || { log: console.error, error: console.error },
         })
       })
+      // Don't cache a rejected import forever; allow the next call to retry
+      actionRecordingManagerPromise.catch(() => {
+        actionRecordingManagerPromise = null
+      })
     }
     return actionRecordingManagerPromise
   }
@@ -2441,10 +2445,15 @@ export async function startPlayWriterCDPRelayServer({
   // Serve recorded events so `recorder events` works against a remote relay
   // (the jsonl file lives on the relay's machine, not the CLI's)
   app.get('/recorder/events/:id', async (c) => {
-    const { recordingFilePath } = await import('./action-recorder.js')
-    const recordingId = c.req.param('id')
-    if (!/^\d+$/.test(recordingId)) {
+    const { recordingFilePath, latestRecordingId } = await import('./action-recorder.js')
+    // 'latest' resolves to the most recent recording so the CLI can omit the id
+    const param = c.req.param('id')
+    if (param !== 'latest' && !/^\d+$/.test(param)) {
       return c.json({ error: 'Invalid recording id' }, 400)
+    }
+    const recordingId = param === 'latest' ? latestRecordingId() : param
+    if (!recordingId) {
+      return c.json({ error: 'No recordings found' }, 404)
     }
     const filePath = recordingFilePath(recordingId)
     try {
