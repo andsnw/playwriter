@@ -1106,6 +1106,13 @@ export class PlaywrightExecutor {
     }
   }
 
+  /** Used by the action recorder (`playwriter record`) to attach
+   *  context-level instrumentation. Connects to the browser if needed. */
+  async getBrowserContext(): Promise<BrowserContext> {
+    const { page } = await this.ensureConnection()
+    return this.context || page.context()
+  }
+
   private async getCurrentPage(timeout = 10000): Promise<Page> {
     if (this.page && !this.page.isClosed()) {
       return this.page

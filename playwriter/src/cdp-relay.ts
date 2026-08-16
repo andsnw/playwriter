@@ -2016,6 +2016,7 @@ export async function startPlayWriterCDPRelayServer({
 
   app.use('/cli/*', privilegedRouteMiddleware)
   app.use('/recording/*', privilegedRouteMiddleware)
+  app.use('/recorder/*', privilegedRouteMiddleware)
   app.use('/stream/*', privilegedRouteMiddleware)
   app.use('/mcp-log', privilegedRouteMiddleware)
 
@@ -2363,6 +2364,95 @@ export async function startPlayWriterCDPRelayServer({
     const cancelParams: CancelRecordingParams = resolvedSessionId ? { sessionId: resolvedSessionId } : {}
     const result = await relay.cancelRecording(cancelParams)
     return c.json(result)
+  })
+
+  // ============================================================================
+  // Action Record Endpoints - Record user interactions as jsonl for skill
+  // generation (playwriter recorder start/stop). Runs inside the relay daemon so
+  // recording survives CLI exits. Events persist in ~/.playwriter/recordings/.
+  // ============================================================================
+
+  // Memoized as a promise so concurrent first calls share one manager instance
+  let actionRecordingManagerPromise: Promise<import('./action-recorder.js').ActionRecordingManager> | null = null
+  const getActionRecordingManager = () => {
+    if (!actionRecordingManagerPromise) {
+      actionRecordingManagerPromise = import('./action-recorder.js').then(({ ActionRecordingManager }) => {
+        return new ActionRecordingManager({
+          logger: logger || { log: console.error, error: console.error },
+        })
+      })
+    }
+    return actionRecordingManagerPromise
+  }
+
+  // RecordingError carries an HTTP status code hint (409 duplicate, 404 missing, 400 ambiguous)
+  const recordingErrorStatus = (error: unknown): 400 | 404 | 409 | 500 => {
+    const statusCode = (error as { statusCode?: number }).statusCode
+    if (statusCode === 400 || statusCode === 404 || statusCode === 409) {
+      return statusCode
+    }
+    return 500
+  }
+
+  app.post('/recorder/start', async (c) => {
+    let body: { sessionId?: string | number }
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+    try {
+      const sessionId = normalizeSessionId(body.sessionId)
+      if (!sessionId) {
+        return c.json({ error: 'sessionId is required' }, 400)
+      }
+      const manager = await getExecutorManager()
+      const executor = manager.getSession(sessionId)
+      if (!executor) {
+        return c.json({ error: `Session ${sessionId} not found. Run 'playwriter session new' first.` }, 404)
+      }
+      const context = await executor.getBrowserContext()
+      const recordingManager = await getActionRecordingManager()
+      const recorder = await recordingManager.start({ context, sessionId })
+      return c.json({ recordingId: recorder.recordingId, sessionId, file: recorder.filePath })
+    } catch (error: any) {
+      logger?.error('Record start endpoint error:', error)
+      return c.json({ error: error.message }, recordingErrorStatus(error))
+    }
+  })
+
+  app.post('/recorder/stop', async (c) => {
+    try {
+      const body: { recordingId?: string | number } = await c.req.json().catch(() => ({}))
+      const recordingId = normalizeSessionId(body.recordingId)
+      const recordingManager = await getActionRecordingManager()
+      const result = await recordingManager.stop({ recordingId: recordingId || undefined })
+      return c.json(result)
+    } catch (error: any) {
+      return c.json({ error: error.message }, recordingErrorStatus(error))
+    }
+  })
+
+  app.get('/recorder/status', async (c) => {
+    const recordingManager = await getActionRecordingManager()
+    return c.json({ recordings: recordingManager.list() })
+  })
+
+  // Serve recorded events so `recorder events` works against a remote relay
+  // (the jsonl file lives on the relay's machine, not the CLI's)
+  app.get('/recorder/events/:id', async (c) => {
+    const { recordingFilePath } = await import('./action-recorder.js')
+    const recordingId = c.req.param('id')
+    if (!/^\d+$/.test(recordingId)) {
+      return c.json({ error: 'Invalid recording id' }, 400)
+    }
+    const filePath = recordingFilePath(recordingId)
+    try {
+      const content = await fs.promises.readFile(filePath, 'utf-8')
+      return c.text(content)
+    } catch {
+      return c.json({ error: `Recording ${recordingId} not found` }, 404)
+    }
   })
 
   // ============================================================================

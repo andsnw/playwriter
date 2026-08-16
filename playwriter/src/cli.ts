@@ -1377,6 +1377,218 @@ cli
     })
   })
 
+// ============================================================================
+// Action recording commands. Recording runs inside the relay daemon (survives
+// CLI exit) and writes user interactions as jsonl to ~/.playwriter/recordings/.
+// The printed prompt (src/recorder-prompt.md) instructs the agent how to turn a
+// recording into a SKILL.md + utils script that automates the same flow.
+// ============================================================================
+
+cli
+  .command('recorder start', 'Record user actions in the browser as jsonl events for skill generation')
+  .option('--host <host>', 'Remote relay server host')
+  .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
+  .option('-s, --session <id>', 'Session ID (defaults to the single active session, or creates a new one)')
+  .example('playwriter recorder start')
+  .example('playwriter recorder start -s 1')
+  .action(async (options) => {
+    if (!options.host && !process.env.PLAYWRITER_HOST) {
+      await ensureRelayServer({ logger: console })
+    }
+    const serverUrl = await getServerUrl(options.host)
+    const headers = buildAuthHeaders({ token: options.token, json: true })
+
+    try {
+      const sessionId: string = await (async () => {
+        const explicit = options.session ? String(options.session) : process.env.PLAYWRITER_SESSION
+        if (explicit) {
+          return explicit
+        }
+        const listResponse = await fetch(`${serverUrl}/cli/sessions`, {
+          headers: buildAuthHeaders({ token: options.token }),
+          signal: AbortSignal.timeout(5000),
+        })
+        const { sessions } = (await listResponse.json()) as { sessions: Array<{ id: string }> }
+        if (sessions.length === 1) {
+          return sessions[0].id
+        }
+        if (sessions.length > 1) {
+          console.error(`Multiple sessions active (${sessions.map((s) => s.id).join(', ')}). Pass -s <id>.`)
+          process.exit(1)
+        }
+        // No sessions: create a default extension-mode session
+        const newResponse = await fetch(`${serverUrl}/cli/session/new`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ cwd: process.cwd() }),
+        })
+        const newResult = (await newResponse.json()) as { id?: string; error?: string }
+        if (!newResponse.ok || !newResult.id) {
+          console.error(`Error creating session: ${newResult.error || newResponse.status}`)
+          console.error(`Run 'playwriter session new' first, then retry with -s <id>.`)
+          process.exit(1)
+        }
+        return newResult.id
+      })()
+
+      const response = await fetch(`${serverUrl}/recorder/start`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ sessionId }),
+      })
+      const result = (await response.json()) as { recordingId?: string; file?: string; error?: string }
+      if (!response.ok || !result.recordingId) {
+        console.error(`Error: ${result.error || response.status}`)
+        process.exit(1)
+      }
+
+      console.log(`Recording ${result.recordingId} started on session ${sessionId}.`)
+      console.log(`Events file: ${result.file}`)
+      console.log('')
+      const promptPath = path.join(__dirname, '..', 'src', 'recorder-prompt.md')
+      console.log(fs.readFileSync(promptPath, 'utf-8'))
+    } catch (error: any) {
+      console.error(`Error: ${error.message}`)
+      process.exit(1)
+    }
+  })
+
+cli
+  .command('recorder stop [recordingId]', 'Stop an active recording and print where the events are')
+  .option('--host <host>', 'Remote relay server host')
+  .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
+  .example('playwriter recorder stop')
+  .action(async (recordingId, options) => {
+    const serverUrl = await getServerUrl(options.host)
+    try {
+      const response = await fetch(`${serverUrl}/recorder/stop`, {
+        method: 'POST',
+        headers: buildAuthHeaders({ token: options.token, json: true }),
+        body: JSON.stringify(recordingId ? { recordingId } : {}),
+      })
+      const result = (await response.json()) as {
+        recordingId?: string
+        eventCount?: number
+        filePath?: string
+        error?: string
+      }
+      if (!response.ok || !result.recordingId) {
+        console.error(`Error: ${result.error || response.status}`)
+        process.exit(1)
+      }
+      console.log(`Recording ${result.recordingId} stopped. ${result.eventCount} events captured.`)
+      console.log(`Events file: ${result.filePath}`)
+      console.log('')
+      console.log('Next steps (full instructions were printed by `recorder start`):')
+      console.log('  1. Ask the user to summarize what they did and call out anything non-obvious')
+      console.log(`  2. playwriter recorder events ${result.recordingId}    # inspect the recorded events (use jq)`)
+      console.log('  3. Verify the recorded locators against the live page (snapshot/exec loop)')
+      console.log('  4. Ask for skill name, location, use case, parameters — then write SKILL.md + utils.js')
+      console.log('  5. Validate: replay the utils end-to-end with test params before calling it done')
+    } catch (error: any) {
+      console.error(`Error: ${error.message}`)
+      process.exit(1)
+    }
+  })
+
+cli
+  .command(
+    'recorder events <recordingId> [...eventIds]',
+    'Print recorded events as jsonl. Default is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies, full snapshot diffs).',
+  )
+  .option('--host <host>', 'Remote relay server host')
+  .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
+  .option('--type <type>', 'Only print events of this type (e.g. action, network, snapshot-diff)')
+  .option('--full', 'Print full events for the whole timeline instead of the thin view')
+  .example('playwriter recorder events 1')
+  .example(`playwriter recorder events 1 | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'`)
+  .example('playwriter recorder events 1 4 7   # full details of events 4 and 7')
+  .example('playwriter recorder events 1 --type action')
+  .action(async (recordingId, eventIds, options) => {
+    const content: string = await (async () => {
+      // Local relay: read the jsonl straight from disk. Remote relay: the file
+      // lives on the relay's machine, fetch it over HTTP.
+      if (!options.host && !process.env.PLAYWRITER_HOST) {
+        const { recordingFilePath } = await import('./action-recorder.js')
+        const filePath = recordingFilePath(String(recordingId))
+        if (!fs.existsSync(filePath)) {
+          console.error(`Recording ${recordingId} not found at ${filePath}`)
+          process.exit(1)
+        }
+        return fs.readFileSync(filePath, 'utf-8')
+      }
+      const serverUrl = await getServerUrl(options.host)
+      const response = await fetch(`${serverUrl}/recorder/events/${recordingId}`, {
+        headers: buildAuthHeaders({ token: options.token }),
+        signal: AbortSignal.timeout(10000),
+      })
+      if (!response.ok) {
+        console.error(`Error: ${response.status} ${await response.text()}`)
+        process.exit(1)
+      }
+      return await response.text()
+    })()
+    const { projectThinEvent } = await import('./action-recorder.js')
+    const requestedIds = new Set((eventIds || []).map((id) => Number(id)))
+    const lines = content.split('\n').filter(Boolean)
+    for (const line of lines) {
+      const event: { id?: number; type?: string; [key: string]: unknown } | null = (() => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return null
+        }
+      })()
+      if (!event) {
+        continue
+      }
+      if (requestedIds.size > 0) {
+        // Drill-down mode: print full details for the requested event ids only
+        if (event.id !== undefined && requestedIds.has(event.id)) {
+          console.log(line)
+        }
+        continue
+      }
+      if (options.type && event.type !== options.type) {
+        continue
+      }
+      if (options.full) {
+        console.log(line)
+        continue
+      }
+      console.log(JSON.stringify(projectThinEvent(event as { t: number; type: string })))
+    }
+  })
+
+cli
+  .command('recorder status', 'List active recordings')
+  .option('--host <host>', 'Remote relay server host')
+  .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
+  .action(async (options) => {
+    const serverUrl = await getServerUrl(options.host)
+    try {
+      const response = await fetch(`${serverUrl}/recorder/status`, {
+        headers: buildAuthHeaders({ token: options.token }),
+        signal: AbortSignal.timeout(5000),
+      })
+      const { recordings } = (await response.json()) as {
+        recordings: Array<{ recordingId: string; sessionId: string; startedAt: number; eventCount: number; filePath: string }>
+      }
+      if (recordings.length === 0) {
+        console.log('No active recordings')
+        return
+      }
+      for (const recording of recordings) {
+        const uptime = Math.round((Date.now() - recording.startedAt) / 1000)
+        console.log(`Recording ${recording.recordingId} (session ${recording.sessionId}): ${recording.eventCount} events, running ${uptime}s`)
+        console.log(`  ${recording.filePath}`)
+      }
+    } catch (error: any) {
+      console.error(`Error: ${error.message}`)
+      process.exit(1)
+    }
+  })
+
 cli
   .command(
     'serve',
