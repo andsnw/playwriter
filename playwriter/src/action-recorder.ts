@@ -31,6 +31,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { BrowserContext, Frame, Page, Request } from '@xmorse/playwright-core'
 import { getAriaSnapshot } from './aria-snapshot.js'
+import { getCDPSessionForPage } from './cdp-session.js'
 import { createSmartDiff } from './diff-utils.js'
 
 // Read at call time (not module load) so tests can point recordings at a temp
@@ -199,29 +200,16 @@ export class ActionRecorder {
   readonly sessionId: string
   readonly filePath: string
   readonly startedAt = Date.now()
-  eventCount = 0
   /** Called once when the recording stops (manual stop or context close) */
   onDidStop: (() => void) | null = null
 
   private context: BrowserContext
   private logger: RecorderLogger
   private state: 'recording' | 'stopping' | 'stopped' = 'recording'
-  private truncated = false
 
   private actionSeq = 0
   private eventSeq = 0
-  // Coalesce actionAdded/actionUpdated bursts (fill emits one update per
-  // keystroke) into a single final action event, then capture post-action state.
-  private pendingAction: {
-    actionId: number
-    page: Page
-    pageAlias?: string
-    framePath?: string[]
-    actionName: string
-    code: string
-    selector?: string
-  } | null = null
-  private pendingActionTimer: ReturnType<typeof setTimeout> | null = null
+  private actionCoalesce: Coalescer<PendingRecorderAction>
 
   // Serialize async captures so jsonl event order matches real order
   private captureChain: Promise<void> = Promise.resolve()
@@ -249,6 +237,31 @@ export class ActionRecorder {
     this.recordingId = options.recordingId
     this.logger = options.logger
     this.filePath = recordingFilePath(options.recordingId)
+    this.actionCoalesce = createCoalescer({
+      delayMs: ACTION_COALESCE_MS,
+      onFlush: (pending) => {
+        this.writeEvent(
+          {
+            type: 'action',
+            actionId: pending.actionId,
+            action: pending.actionName,
+            code: pending.code,
+            selector: pending.selector,
+            pageAlias: pending.pageAlias,
+            framePath: pending.framePath?.length ? pending.framePath : undefined,
+            pageUrl: safePageUrl(pending.page),
+          },
+          pending.observedAt,
+        )
+        this.enqueueCapture(() => {
+          return this.capturePostActionState(pending.page, pending.actionId)
+        })
+      },
+    })
+  }
+
+  get eventCount() {
+    return this.eventSeq
   }
 
   /** @param at epoch ms when the event was observed (defaults to now) */
@@ -256,9 +269,8 @@ export class ActionRecorder {
     if (this.state === 'stopped' && event.type !== 'recording-stopped') {
       return
     }
-    if (this.eventCount >= MAX_EVENTS && event.type !== 'recording-stopped') {
-      if (!this.truncated) {
-        this.truncated = true
+    if (this.eventSeq >= MAX_EVENTS && event.type !== 'recording-stopped') {
+      if (this.eventSeq === MAX_EVENTS) {
         this.appendLine({ t: this.relativeTime(Date.now()), type: 'truncated', maxEvents: MAX_EVENTS })
       }
       return
@@ -276,7 +288,6 @@ export class ActionRecorder {
       // can drill into full details from the thin timeline view
       const line = { id: ++this.eventSeq, ...event }
       fs.appendFileSync(this.filePath, JSON.stringify(line) + '\n', { mode: 0o600 })
-      this.eventCount++
     } catch (error) {
       this.logger.error('[record] failed to write event:', error)
     }
@@ -398,7 +409,7 @@ export class ActionRecorder {
     this.detachListeners()
     // 2. Flush the pending action and let its capture (and other in-flight
     //    captures) finish. New captures can't be enqueued anymore.
-    this.flushPendingAction()
+    this.actionCoalesce.flush()
     await this.captureChain.catch(() => {})
     // 3. Finalize
     this.state = 'stopped'
@@ -516,58 +527,32 @@ export class ActionRecorder {
     if (this.state !== 'recording') {
       return
     }
-    const actionName = actionInContext.action.name
-    const selector = actionInContext.action.selector
-    code = code.trim()
-    const pending = this.pendingAction
+    const pending = this.actionCoalesce.pending
     // Playwright already decided merge-vs-new via shouldMergeAction: an update
     // replaces the pending action (same page), an add flushes the previous one.
     const replacesPending = isUpdate && pending !== null && pending.page === page
     if (pending && !replacesPending) {
-      this.flushPendingAction()
+      this.actionCoalesce.flush()
     }
-    this.pendingAction = {
+    const actionName = actionInContext.action.name
+    this.actionCoalesce.replace({
       actionId: replacesPending ? pending!.actionId : ++this.actionSeq,
+      observedAt: replacesPending ? pending!.observedAt : Date.now(),
       page,
       pageAlias: actionInContext.frame?.pageAlias,
       framePath: actionInContext.frame?.framePath,
       actionName,
-      code,
-      selector,
-    }
-    if (this.pendingActionTimer) {
-      clearTimeout(this.pendingActionTimer)
-    }
-    this.pendingActionTimer = setTimeout(() => {
-      // Known tradeoff: an actionUpdated arriving after this flush (user pauses
-      // >800ms mid-fill) becomes a second action event with a new actionId for
-      // the same logical fill. Consumers should treat consecutive fills on the
-      // same selector as one step.
-      this.flushPendingAction()
-    }, ACTION_COALESCE_MS)
-  }
-
-  private flushPendingAction() {
-    if (this.pendingActionTimer) {
-      clearTimeout(this.pendingActionTimer)
-      this.pendingActionTimer = null
-    }
-    const pending = this.pendingAction
-    if (!pending) {
-      return
-    }
-    this.pendingAction = null
-    this.writeEvent({
-      type: 'action',
-      actionId: pending.actionId,
-      action: pending.actionName,
-      code: pending.code,
-      selector: pending.selector,
-      pageAlias: pending.pageAlias,
-      framePath: pending.framePath?.length ? pending.framePath : undefined,
-      pageUrl: safePageUrl(pending.page),
+      code: sanitizeLocatorText(code.trim()),
+      selector: actionInContext.action.selector
+        ? sanitizeLocatorText(actionInContext.action.selector)
+        : undefined,
     })
-    this.enqueueCapture(() => this.capturePostActionState(pending.page, pending.actionId))
+    // Only fill needs the 800ms coalesce (one event per keystroke burst).
+    // Clicks and navigations must write immediately or their network/navigation
+    // events appear first and the timeline reads backwards.
+    if (actionName !== 'fill') {
+      this.actionCoalesce.flush()
+    }
   }
 
   private enqueueCapture(task: () => Promise<void>) {
@@ -702,7 +687,7 @@ export class ActionRecorder {
   }
 
   private async captureCookies({ emit, afterActionId }: { emit: boolean; afterActionId?: number }) {
-    const cookies = await this.context.cookies().catch(() => [])
+    const cookies = await listCookies({ context: this.context, pages: this.context.pages() })
     const current = new Map<string, string>()
     for (const cookie of cookies) {
       // Value fingerprint (hash, not the value itself) so token rotation shows
@@ -877,6 +862,99 @@ function safePageUrl(page: Page): string {
     return page.url()
   } catch {
     return ''
+  }
+}
+
+type PendingRecorderAction = {
+  actionId: number
+  observedAt: number
+  page: Page
+  pageAlias?: string
+  framePath?: string[]
+  actionName: string
+  code: string
+  selector?: string
+}
+
+type CookieIdentity = { name: string; domain: string; path: string; value: string }
+
+// Extension mode rejects context.cookies() (Storage.getCookies has no browser
+// session). Fall back to Network.getCookies on each page's existing CDP session.
+async function listCookies({ context, pages }: { context: BrowserContext; pages: Page[] }): Promise<CookieIdentity[]> {
+  try {
+    return await context.cookies()
+  } catch {}
+  const byKey = new Map<string, CookieIdentity>()
+  for (const page of pages) {
+    if (page.isClosed()) {
+      continue
+    }
+    const session = await getCDPSessionForPage({ page }).catch(() => {
+      return null
+    })
+    if (!session) {
+      continue
+    }
+    const result = await session.send('Network.getCookies').catch(() => {
+      return null
+    })
+    for (const cookie of result?.cookies || []) {
+      byKey.set(`${cookie.name}|${cookie.domain}|${cookie.path}`, cookie)
+    }
+  }
+  return [...byKey.values()]
+}
+
+// Icon fonts put private-use glyphs in accessible names (` Login`). Strip them
+// so recorded locators stay `getByRole('button', { name: 'Login' })`.
+function sanitizeLocatorText(text: string): string {
+  return text.replace(/[\uE000-\uF8FF]\s*/g, '').replace(/\s+/g, ' ')
+}
+
+type Coalescer<T> = {
+  readonly pending: T | null
+  replace: (value: T) => void
+  flush: () => void
+}
+
+// Known tradeoff: an actionUpdated after this flush (pause >800ms mid-fill)
+// becomes a second action event. Treat consecutive fills on the same selector as one step.
+function createCoalescer<T>({ delayMs, onFlush }: { delayMs: number; onFlush: (value: T) => void }): Coalescer<T> {
+  let pending: T | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  function clearTimer() {
+    if (!timer) {
+      return
+    }
+    clearTimeout(timer)
+    timer = null
+  }
+
+  return {
+    get pending() {
+      return pending
+    },
+    replace(value: T) {
+      pending = value
+      clearTimer()
+      timer = setTimeout(() => {
+        timer = null
+        const valueToFlush = pending
+        pending = null
+        if (valueToFlush) {
+          onFlush(valueToFlush)
+        }
+      }, delayMs)
+    },
+    flush() {
+      clearTimer()
+      const valueToFlush = pending
+      pending = null
+      if (valueToFlush) {
+        onFlush(valueToFlush)
+      }
+    },
   }
 }
 
