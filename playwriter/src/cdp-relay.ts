@@ -2367,7 +2367,7 @@ export async function startPlayWriterCDPRelayServer({
   })
 
   // ============================================================================
-  // Action Record Endpoints - Record user interactions as jsonl for skill
+  // Action Record Endpoints - Record user interactions as a JSON array for skill
   // generation (playwriter recorder start/stop). Runs inside the relay daemon so
   // recording survives CLI exits. Events persist in ~/.playwriter/recordings/.
   // ============================================================================
@@ -2443,7 +2443,7 @@ export async function startPlayWriterCDPRelayServer({
   })
 
   // Serve recorded events so `recorder events` works against a remote relay
-  // (the jsonl file lives on the relay's machine, not the CLI's)
+  // (the events file lives on the relay's machine, not the CLI's)
   app.get('/recorder/events/:id', async (c) => {
     const { recordingFilePath, latestRecordingId } = await import('./action-recorder.js')
     // 'latest' resolves to the most recent recording so the CLI can omit the id

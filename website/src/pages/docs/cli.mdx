@@ -138,12 +138,12 @@ The relay starts automatically when you use the CLI locally. Use `serve` explici
 
 ## Skill recorder
 
-Record a workflow you perform manually in the browser as jsonl events an agent can turn
+Record a workflow you perform manually in the browser as events an agent can turn
 into a reusable skill. See [Skill Recorder](/docs/skill-recorder) for the full guide:
 
 ```bash
 playwriter recorder start                 # start recording user actions (runs in relay daemon)
-playwriter recorder stop                  # stop and print event count + jsonl path
+playwriter recorder stop                  # stop and print event count + file path
 playwriter recorder events                # thin event timeline of the latest recording
 playwriter recorder events 1 4 7          # full details of events 4 and 7 in recording 1
 playwriter recorder status                # list active recordings

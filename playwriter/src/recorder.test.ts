@@ -1,5 +1,5 @@
 // End-to-end tests for the `playwriter recorder` action recording feature:
-// relay /recorder/* endpoints + ActionRecorder jsonl output. Trusted input is
+// relay /recorder/* endpoints + ActionRecorder JSON output. Trusted input is
 // dispatched via raw CDP so it goes through the injected recorder exactly
 // like real user interactions.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -9,7 +9,7 @@ import path from 'node:path'
 import { chromium } from '@xmorse/playwright-core'
 import { getCdpUrl } from './utils.js'
 import { getCDPSessionForPage } from './cdp-session.js'
-import { projectThinEvent } from './action-recorder.js'
+import { parseRecording, projectThinEvent } from './action-recorder.js'
 import { setupTestContext, cleanupTestContext, getExtensionServiceWorker, type TestContext } from './test-utils.js'
 import './test-declarations.js'
 
@@ -139,11 +139,7 @@ describe('action recording', () => {
     expect(stop.recordingId).toBe(start.recordingId)
     expect(stop.eventCount).toBeGreaterThan(3)
 
-    const events = fs
-      .readFileSync(stop.filePath, 'utf-8')
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { id: number; t: number; type: string; code?: string; kind?: string; added?: unknown; resourceType?: string })
+    const events = parseRecording(fs.readFileSync(stop.filePath, 'utf-8'))
 
     // recorded actions carry generated locator code
     const actionCodes = events.filter((e) => e.type === 'action').map((e) => e.code)
@@ -200,7 +196,7 @@ describe('action recording', () => {
     // events are also served over HTTP for remote relays
     const eventsResponse = await fetch(`${SERVER_URL}/recorder/events/${start.recordingId}`)
     expect(eventsResponse.status).toBe(200)
-    const remoteEvents = (await eventsResponse.text()).split('\n').filter(Boolean)
+    const remoteEvents = parseRecording(await eventsResponse.text())
     expect(remoteEvents.length).toBe(stop.eventCount)
 
     // ── second recording on the same session must record actions again ──
@@ -223,11 +219,7 @@ describe('action recording', () => {
       body: JSON.stringify({}),
     })
     const stop2 = (await stop2Response.json()) as { filePath: string }
-    const events2 = fs
-      .readFileSync(stop2.filePath, 'utf-8')
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { type: string; code?: string })
+    const events2 = parseRecording(fs.readFileSync(stop2.filePath, 'utf-8'))
     const actions2 = events2.filter((e) => e.type === 'action')
     // exactly one action: duplicate listeners in the fork would produce doubles
     expect(actions2.map((e) => e.code)).toMatchInlineSnapshot(`

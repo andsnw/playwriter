@@ -2,7 +2,7 @@
 
 The user is now performing a workflow manually in their browser. Every click, fill,
 keypress, navigation, network request, cookie/storage change, focus change, scroll
-and aria snapshot diff is being written to a jsonl file.
+and aria snapshot diff is being written to a JSON event file.
 
 The end goal: a **skill** (SKILL.md + importable utils script) that automates the
 same flow with playwriter. Follow the phases below in order.
@@ -38,7 +38,7 @@ This human context is essential for filtering dead ends and adding correct waits
 
 ## Phase 3: inspect the events
 
-Events are jsonl (one JSON object per line). `t` is seconds since recording start and
+Events are a JSON array on disk. `recorder events` prints one JSON object per line for jq. `t` is seconds since recording start and
 every event has a sequential `id`. The default output is a **thin timeline**: heavy
 payloads (network bodies, snapshot diffs, storage values) are replaced by sizes or key
 lists so the full timeline is cheap to read. Pass event ids to get the full details of

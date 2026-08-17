@@ -2,24 +2,24 @@
 //
 // Records user interactions (clicks, fills, presses, navigations) plus derived
 // state changes (aria snapshot diffs, network requests, cookie/storage changes,
-// focus and scroll) into a jsonl file that an agent later reads to author a
-// SKILL.md + utils script automating the same flow.
+// focus and scroll) into a JSON array file that an agent later reads to author
+// a SKILL.md + utils script automating the same flow.
 //
 // The locator strings come from the playwright fork's headless recorder:
 // context._enableRecorder({ mode: 'recording', recorderMode: 'api' }) emits
 // actionAdded/actionUpdated events with generated code like
 // `await page.getByRole('button', { name: 'Submit' }).click()`.
 //
-// Design notes (from oracle review):
+// The file is an editable array, not jsonl, so actionUpdated (each fill
+// keystroke) mutates the last action in place. No debounce, no pending queue.
+//
+// Design notes:
 // - action events carry an incrementing actionId; async state captures
 //   (snapshot/cookies/storage/focus) reference afterActionId so consumers can
 //   associate state changes with the action that caused them even when events
 //   from a fast action burst interleave.
-// - actionAdded vs actionUpdated distinction from playwright is preserved:
-//   updates replace the pending action (fill emits one update per keystroke),
-//   adds flush the previous pending action first.
-// - stop() first stops accepting input (state machine), then flushes, then
-//   awaits in-flight captures, so no events are lost or written after stop.
+// - stop() first stops accepting input, then awaits in-flight captures, so no
+//   events are lost or written after stop.
 // - recordings auto-stop when the browser context closes (extension toggled
 //   off, session reset); the manager is notified via onDidStop.
 // - files are chmod 0600 in a 0700 dir. Values (storage, postData) are
@@ -44,7 +44,15 @@ export function recordingFilePath(recordingId: string): string {
   if (!/^\d+$/.test(recordingId)) {
     throw new Error(`Invalid recording id: ${recordingId}`)
   }
-  return path.join(getRecordingsDir(), `${recordingId}.jsonl`)
+  const jsonPath = path.join(getRecordingsDir(), `${recordingId}.json`)
+  if (fs.existsSync(jsonPath)) {
+    return jsonPath
+  }
+  const jsonlPath = path.join(getRecordingsDir(), `${recordingId}.jsonl`)
+  if (fs.existsSync(jsonlPath)) {
+    return jsonlPath
+  }
+  return jsonPath
 }
 
 /** Highest recording id present on disk, or null when there are no recordings.
@@ -53,13 +61,31 @@ export function latestRecordingId(): string | null {
   let max = 0
   try {
     for (const file of fs.readdirSync(getRecordingsDir())) {
-      const match = file.match(/^(\d+)\.jsonl$/)
+      const match = file.match(/^(\d+)\.(json|jsonl)$/)
       if (match) {
         max = Math.max(max, Number(match[1]))
       }
     }
   } catch {}
   return max > 0 ? String(max) : null
+}
+
+/** Parse a recording file. New files are a JSON array; old ones are jsonl. */
+export function parseRecording(content: string): RecordedEvent[] {
+  const trimmed = content.trim()
+  if (!trimmed) {
+    return []
+  }
+  if (trimmed.startsWith('[')) {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (!Array.isArray(parsed)) {
+      throw new Error('Recording file is not a JSON array')
+    }
+    return parsed as RecordedEvent[]
+  }
+  return trimmed.split('\n').filter(Boolean).map((line) => {
+    return JSON.parse(line) as RecordedEvent
+  })
 }
 
 interface RecorderLogger {
@@ -106,12 +132,11 @@ export class RecordingError extends Error {
   }
 }
 
-// The jsonl file stores FULL event data (generous caps below). Context
-// economy happens at read time: `recorder events` prints a thin projection
-// (heavy fields replaced by sizes, see projectThinEvent) and specific event
-// ids can be passed to read the full details on demand.
+// The file stores FULL event data (generous caps below). Context economy
+// happens at read time: `recorder events` prints a thin projection (heavy
+// fields replaced by sizes, see projectThinEvent) and specific event ids can
+// be passed to read the full details on demand.
 const TRACKED_RESOURCE_TYPES = new Set(['document', 'xhr', 'fetch'])
-const ACTION_COALESCE_MS = 800
 const POLL_INTERVAL_MS = 1500
 const MAX_SNAPSHOT_DIFF_CHARS = 50000
 const MAX_VALUE_CHARS = 1000
@@ -208,8 +233,7 @@ export class ActionRecorder {
   private state: 'recording' | 'stopping' | 'stopped' = 'recording'
 
   private actionSeq = 0
-  private eventSeq = 0
-  private actionCoalesce: Coalescer<PendingRecorderAction>
+  private events: RecordedEvent[] = []
 
   // Serialize async captures so jsonl event order matches real order
   private captureChain: Promise<void> = Promise.resolve()
@@ -237,31 +261,10 @@ export class ActionRecorder {
     this.recordingId = options.recordingId
     this.logger = options.logger
     this.filePath = recordingFilePath(options.recordingId)
-    this.actionCoalesce = createCoalescer({
-      delayMs: ACTION_COALESCE_MS,
-      onFlush: (pending) => {
-        this.writeEvent(
-          {
-            type: 'action',
-            actionId: pending.actionId,
-            action: pending.actionName,
-            code: pending.code,
-            selector: pending.selector,
-            pageAlias: pending.pageAlias,
-            framePath: pending.framePath?.length ? pending.framePath : undefined,
-            pageUrl: safePageUrl(pending.page),
-          },
-          pending.observedAt,
-        )
-        this.enqueueCapture(() => {
-          return this.capturePostActionState(pending.page, pending.actionId)
-        })
-      },
-    })
   }
 
   get eventCount() {
-    return this.eventSeq
+    return this.events.length
   }
 
   /** @param at epoch ms when the event was observed (defaults to now) */
@@ -269,28 +272,36 @@ export class ActionRecorder {
     if (this.state === 'stopped' && event.type !== 'recording-stopped') {
       return
     }
-    if (this.eventSeq >= MAX_EVENTS && event.type !== 'recording-stopped') {
-      if (this.eventSeq === MAX_EVENTS) {
-        this.appendLine({ t: this.relativeTime(Date.now()), type: 'truncated', maxEvents: MAX_EVENTS })
+    if (this.events.length >= MAX_EVENTS && event.type !== 'recording-stopped') {
+      if (this.events[this.events.length - 1]?.type !== 'truncated') {
+        this.events.push({
+          id: this.events.length + 1,
+          t: this.relativeTime(Date.now()),
+          type: 'truncated',
+          maxEvents: MAX_EVENTS,
+        })
+        this.persist()
       }
       return
     }
-    this.appendLine({ ...event, t: this.relativeTime(at ?? Date.now()) })
+    this.events.push({
+      id: this.events.length + 1,
+      ...event,
+      t: this.relativeTime(at ?? Date.now()),
+    })
+    this.persist()
+  }
+
+  private persist() {
+    try {
+      fs.writeFileSync(this.filePath, JSON.stringify(this.events) + '\n', { mode: 0o600 })
+    } catch (error) {
+      this.logger.error('[record] failed to write event:', error)
+    }
   }
 
   private relativeTime(at: number): number {
     return Math.round((at - this.startedAt) / 100) / 10
-  }
-
-  private appendLine(event: RecordedEvent) {
-    try {
-      // Every event gets a sequential id so `recorder events <rec> <id...>`
-      // can drill into full details from the thin timeline view
-      const line = { id: ++this.eventSeq, ...event }
-      fs.appendFileSync(this.filePath, JSON.stringify(line) + '\n', { mode: 0o600 })
-    } catch (error) {
-      this.logger.error('[record] failed to write event:', error)
-    }
   }
 
   async start() {
@@ -298,7 +309,7 @@ export class ActionRecorder {
     // 'wx' fails with EEXIST instead of truncating: another relay process
     // (e.g. tests on a different port) may have allocated the same id from the
     // shared recordings dir. The manager retries with the next id on EEXIST.
-    fs.writeFileSync(this.filePath, '', { mode: 0o600, flag: 'wx' })
+    fs.writeFileSync(this.filePath, '[]\n', { mode: 0o600, flag: 'wx' })
 
     const recorderContext = this.context as unknown as RecorderCapableContext
     await recorderContext._enableRecorder(
@@ -407,14 +418,11 @@ export class ActionRecorder {
       this.pollTimer = null
     }
     this.detachListeners()
-    // 2. Flush the pending action and let its capture (and other in-flight
-    //    captures) finish. New captures can't be enqueued anymore.
-    this.actionCoalesce.flush()
+    // 2. Let in-flight captures finish. New captures can't be enqueued anymore.
     await this.captureChain.catch(() => {})
     // 3. Finalize
     this.state = 'stopped'
-    this.appendLine({
-      t: this.relativeTime(Date.now()),
+    this.writeEvent({
       type: 'recording-stopped',
       durationSeconds: Math.round((Date.now() - this.startedAt) / 1000),
     })
@@ -527,32 +535,41 @@ export class ActionRecorder {
     if (this.state !== 'recording') {
       return
     }
-    const pending = this.actionCoalesce.pending
-    // Playwright already decided merge-vs-new via shouldMergeAction: an update
-    // replaces the pending action (same page), an add flushes the previous one.
-    const replacesPending = isUpdate && pending !== null && pending.page === page
-    if (pending && !replacesPending) {
-      this.actionCoalesce.flush()
+    const codeText = sanitizeLocatorText(code.trim())
+    const selector = actionInContext.action.selector
+      ? sanitizeLocatorText(actionInContext.action.selector)
+      : undefined
+    // actionUpdated = same fill, next keystroke. Edit the last action in place.
+    if (isUpdate) {
+      const last = this.lastActionOnPage(page)
+      if (last) {
+        last.code = codeText
+        last.selector = selector
+        this.persist()
+        return
+      }
     }
-    const actionName = actionInContext.action.name
-    this.actionCoalesce.replace({
-      actionId: replacesPending ? pending!.actionId : ++this.actionSeq,
-      observedAt: replacesPending ? pending!.observedAt : Date.now(),
-      page,
+    const actionId = ++this.actionSeq
+    this.writeEvent({
+      type: 'action',
+      actionId,
+      action: actionInContext.action.name,
+      code: codeText,
+      selector,
       pageAlias: actionInContext.frame?.pageAlias,
-      framePath: actionInContext.frame?.framePath,
-      actionName,
-      code: sanitizeLocatorText(code.trim()),
-      selector: actionInContext.action.selector
-        ? sanitizeLocatorText(actionInContext.action.selector)
-        : undefined,
+      framePath: actionInContext.frame?.framePath?.length ? actionInContext.frame.framePath : undefined,
+      pageUrl: safePageUrl(page),
     })
-    // Only fill needs the 800ms coalesce (one event per keystroke burst).
-    // Clicks and navigations must write immediately or their network/navigation
-    // events appear first and the timeline reads backwards.
-    if (actionName !== 'fill') {
-      this.actionCoalesce.flush()
-    }
+    this.enqueueCapture(() => {
+      return this.capturePostActionState(page, actionId)
+    })
+  }
+
+  private lastActionOnPage(page: Page): RecordedEvent | undefined {
+    const pageUrl = safePageUrl(page)
+    return [...this.events].reverse().find((event) => {
+      return event.type === 'action' && event.pageUrl === pageUrl
+    })
   }
 
   private enqueueCapture(task: () => Promise<void>) {
@@ -865,17 +882,6 @@ function safePageUrl(page: Page): string {
   }
 }
 
-type PendingRecorderAction = {
-  actionId: number
-  observedAt: number
-  page: Page
-  pageAlias?: string
-  framePath?: string[]
-  actionName: string
-  code: string
-  selector?: string
-}
-
 type CookieIdentity = { name: string; domain: string; path: string; value: string }
 
 // Extension mode rejects context.cookies() (Storage.getCookies has no browser
@@ -911,56 +917,9 @@ function sanitizeLocatorText(text: string): string {
   return text.replace(/[\uE000-\uF8FF]\s*/g, '').replace(/\s+/g, ' ')
 }
 
-type Coalescer<T> = {
-  readonly pending: T | null
-  replace: (value: T) => void
-  flush: () => void
-}
-
-// Known tradeoff: an actionUpdated after this flush (pause >800ms mid-fill)
-// becomes a second action event. Treat consecutive fills on the same selector as one step.
-function createCoalescer<T>({ delayMs, onFlush }: { delayMs: number; onFlush: (value: T) => void }): Coalescer<T> {
-  let pending: T | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
-
-  function clearTimer() {
-    if (!timer) {
-      return
-    }
-    clearTimeout(timer)
-    timer = null
-  }
-
-  return {
-    get pending() {
-      return pending
-    },
-    replace(value: T) {
-      pending = value
-      clearTimer()
-      timer = setTimeout(() => {
-        timer = null
-        const valueToFlush = pending
-        pending = null
-        if (valueToFlush) {
-          onFlush(valueToFlush)
-        }
-      }, delayMs)
-    },
-    flush() {
-      clearTimer()
-      const valueToFlush = pending
-      pending = null
-      if (valueToFlush) {
-        onFlush(valueToFlush)
-      }
-    },
-  }
-}
-
 // ============================================================================
 // Manager: tracks active recordings in the relay process. Recording ids are
-// incremental numbers persisted as jsonl filenames in ~/.playwriter/recordings
+// incremental numbers persisted as JSON filenames in ~/.playwriter/recordings
 // so ids survive relay restarts (files outlive the process).
 // ============================================================================
 

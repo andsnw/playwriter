@@ -18,7 +18,7 @@ writes a **skill**: a SKILL.md plus a utils script that automates the same flow 
   <Step title='Say "start recording"'>
     Your agent runs `playwriter recorder start`. From this moment every click, fill,
     navigation, network request, cookie/storage change, and snapshot diff is captured
-    to a jsonl file.
+    to a JSON event file.
   </Step>
   <Step title='Perform the workflow in your browser'>
     Use the app like you normally would, in your real Chrome with your real logins.
@@ -53,7 +53,7 @@ Tell your agent to start recording:
 ```bash
 playwriter recorder start
 # Recording 1 started on session 1.
-# Events file: ~/.playwriter/recordings/1.jsonl
+# Events file: ~/.playwriter/recordings/1.json
 # ... prints the full skill-authoring instructions for the agent ...
 ```
 
@@ -63,7 +63,7 @@ mistakes are fine, dead ends get filtered out later. Then tell the agent you're 
 ```bash
 playwriter recorder stop
 # Recording 1 stopped. 47 events captured.
-# Events file: ~/.playwriter/recordings/1.jsonl
+# Events file: ~/.playwriter/recordings/1.json
 ```
 
 The agent inspects the events. The default view is a **thin timeline**: heavy payloads
@@ -235,7 +235,7 @@ working parts untouched.
 
 - Recording runs inside the **relay daemon**, so it keeps recording after the CLI exits
   and survives until you stop it.
-- Events persist in `~/.playwriter/recordings/<id>.jsonl` (readable only by your user).
+- Events persist in `~/.playwriter/recordings/<id>.json` (readable only by your user).
   Cookie values are never stored; storage values and request bodies are truncated.
 - Works with multiple tabs and popups: actions carry page aliases so the agent knows
   which page each step targets.

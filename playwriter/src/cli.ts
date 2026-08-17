@@ -1379,13 +1379,13 @@ cli
 
 // ============================================================================
 // Action recording commands. Recording runs inside the relay daemon (survives
-// CLI exit) and writes user interactions as jsonl to ~/.playwriter/recordings/.
+// CLI exit) and writes user interactions as a JSON array to ~/.playwriter/recordings/.
 // The printed prompt (src/recorder-prompt.md) instructs the agent how to turn a
 // recording into a SKILL.md + utils script that automates the same flow.
 // ============================================================================
 
 cli
-  .command('recorder start', 'Record user actions in the browser as jsonl events for skill generation')
+  .command('recorder start', 'Record user actions in the browser as events for skill generation')
   .option('--host <host>', 'Remote relay server host')
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
   .option('-s, --session <id>', 'Session ID (defaults to the single active session, or creates a new one)')
@@ -1559,29 +1559,18 @@ cli
       }
       return await response.text()
     })()
-    const { projectThinEvent } = await import('./action-recorder.js')
+    const { projectThinEvent, parseRecording } = await import('./action-recorder.js')
     const invalidIds = (eventIds || []).filter((id) => !/^\d+$/.test(String(id)))
     if (invalidIds.length > 0) {
       console.error(`Invalid event ids: ${invalidIds.join(', ')}. Event ids are the numeric 'id' field from the timeline.`)
       process.exit(1)
     }
     const requestedIds = new Set((eventIds || []).map((id) => Number(id)))
-    const lines = content.split('\n').filter(Boolean)
-    for (const line of lines) {
-      const event: { id?: number; type?: string; [key: string]: unknown } | null = (() => {
-        try {
-          return JSON.parse(line)
-        } catch {
-          return null
-        }
-      })()
-      if (!event) {
-        continue
-      }
+    const events = parseRecording(content)
+    for (const event of events) {
       if (requestedIds.size > 0) {
-        // Drill-down mode: print full details for the requested event ids only
-        if (event.id !== undefined && requestedIds.has(event.id)) {
-          console.log(line)
+        if (event.id !== undefined && requestedIds.has(Number(event.id))) {
+          console.log(JSON.stringify(event))
         }
         continue
       }
@@ -1589,10 +1578,10 @@ cli
         continue
       }
       if (options.full) {
-        console.log(line)
+        console.log(JSON.stringify(event))
         continue
       }
-      console.log(JSON.stringify(projectThinEvent(event as { t: number; type: string })))
+      console.log(JSON.stringify(projectThinEvent(event)))
     }
   })
 
