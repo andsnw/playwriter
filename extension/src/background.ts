@@ -420,6 +420,13 @@ class ConnectionManager {
         return
       }
 
+      // Relay notifies us when action recording starts/stops — update toolbar in all connected tabs
+      if (message.method === 'setRecorderState') {
+        const recording = !!(message.params as { recording?: boolean })?.recording
+        setRecorderStateInAllTabs(recording)
+        return
+      }
+
       // Handle createInitialTab - create a new tab when Playwright connects and no tabs exist
       // We use skipAttachedEvent: true because the relay's Target.setAutoAttach handler will send
       // Target.attachedToTarget for all targets in connectedTargets. If we also sent it here,
@@ -1490,6 +1497,9 @@ async function attachTab(
         world: 'MAIN',
         func: initPlaywriterToolbar,
       })
+      .then(() => {
+        injectRecorderCallbacks(tabId)
+      })
       .catch((err: Error) => {
         logger.debug('Could not inject toolbar (restricted page):', err.message)
       })
@@ -1562,6 +1572,67 @@ function detachTab(tabId: number, shouldDetachDebugger: boolean): void {
     chrome.debugger.detach({ tabId }).catch((err) => {
       logger.debug('Error detaching debugger from tab:', tabId, err.message)
     })
+  }
+}
+
+// Inject start/stop recording callbacks into a single tab's toolbar.
+// Called on tab attach and whenever the relay notifies a state change.
+function injectRecorderCallbacks(tabId: number): void {
+  chrome.scripting
+    .executeScript({
+      target: { tabId, allFrames: false },
+      world: 'MAIN',
+      func: (host: string, port: number) => {
+        const baseUrl = `http://${host}:${port}`
+        ;(window as any).__playwriterToolbarStartRecording = () => {
+          fetch(`${baseUrl}/recorder/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          }).catch(() => {})
+        }
+        ;(window as any).__playwriterToolbarStopRecording = () => {
+          fetch(`${baseUrl}/recorder/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          })
+            .then((r) => r.json())
+            .then((result: { recordingId?: string }) => {
+              if (!result.recordingId) return
+              const prompt = [
+                'I just recorded a browser workflow (recording ' + result.recordingId + ').',
+                'Analyze it and create a reusable skill from it.',
+                '',
+                'Run:',
+                'playwriter recorder events',
+              ].join('\n')
+              navigator.clipboard.writeText(prompt).catch(() => {})
+              ;(window as any).__playwriterToolbarSetRecording?.(false)
+            })
+            .catch(() => {})
+        }
+      },
+      args: [RELAY_HOST, RELAY_PORT],
+    })
+    .catch(() => {})
+}
+
+// Notify all connected tabs when recording starts/stops.
+function setRecorderStateInAllTabs(recording: boolean): void {
+  const { tabs } = store.getState()
+  for (const [tabId, tab] of tabs) {
+    if (tab.state !== 'connected') continue
+    chrome.scripting
+      .executeScript({
+        target: { tabId, allFrames: false },
+        world: 'MAIN',
+        func: (rec: boolean) => {
+          ;(window as any).__playwriterToolbarSetRecording?.(rec)
+        },
+        args: [recording],
+      })
+      .catch(() => {})
   }
 }
 
@@ -2447,6 +2518,9 @@ chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
       target: { tabId: details.tabId, allFrames: false },
       world: 'MAIN',
       func: initPlaywriterToolbar,
+    })
+    .then(() => {
+      injectRecorderCallbacks(details.tabId)
     })
     .catch((err: Error) => {
       logger.debug('Could not re-inject toolbar after navigation:', err.message)

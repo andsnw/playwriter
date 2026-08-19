@@ -12,6 +12,9 @@ declare global {
   interface Window {
     __playwriterToolbarInstalled?: boolean
     __playwriterToolbarDestroy?: () => void
+    __playwriterToolbarSetRecording?: (recording: boolean) => void
+    __playwriterToolbarStopRecording?: (() => void) | null
+    __playwriterToolbarStartRecording?: (() => void) | null
     __playwriterPinCount?: number
     // Template literal index for pinned element globals (playwriterPinnedElem1, etc.)
     [key: `playwriterPinnedElem${number}`]: Element | undefined
@@ -33,6 +36,8 @@ export function initPlaywriterToolbar(): void {
   let pinCount = 0
   let toastTimer: number | null = null
   let overlayEl: HTMLDivElement | null = null
+  let isRecording = false
+  let isDragging = false
   // Declared here so the hoisted setPinMode can reference it before assignment.
   let pinBtn!: HTMLButtonElement
   // Shift-click multi-select: accumulated pins while pin mode stays active.
@@ -41,74 +46,147 @@ export function initPlaywriterToolbar(): void {
   let accumulatedPins: { n: number; element: Element; prevOutline: string; prevOffset: string }[] =
     []
 
+  // ── Position persistence via localStorage (percentages of viewport) ────────
+
+  const POS_KEY = '__playwriter_toolbar_pos'
+
+  function loadPosition(): { leftPct: number; topPct: number } | null {
+    try {
+      const raw = localStorage.getItem(POS_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      if (typeof parsed.leftPct === 'number' && typeof parsed.topPct === 'number') {
+        return parsed
+      }
+    } catch {}
+    return null
+  }
+
+  function savePosition(leftPct: number, topPct: number): void {
+    try {
+      localStorage.setItem(POS_KEY, JSON.stringify({ leftPct, topPct }))
+    } catch {}
+  }
+
   // ── Create shadow-DOM host ─────────────────────────────────────────────────
 
   const host = document.createElement('div')
   host.setAttribute('data-playwriter-toolbar', '1')
+
+  const savedPos = loadPosition()
+  const initLeft = savedPos ? `${savedPos.leftPct}%` : '50%'
+  const initTop = savedPos ? `${savedPos.topPct}%` : '12px'
+
   // pointer-events:none on the host so the shadow-DOM children (pointer-events:all)
   // control interactivity without the host element itself blocking page events
   host.style.cssText =
-    'position:fixed;top:12px;right:12px;z-index:2147483647;pointer-events:none;font-size:0;line-height:0;'
+    `position:fixed;top:${initTop};left:${initLeft};transform:translateX(-50%);z-index:2147483647;pointer-events:none;font-size:0;line-height:0;`
 
   // Closed shadow root: page scripts cannot access our toolbar DOM
   const shadow = host.attachShadow({ mode: 'closed' })
 
   const styleEl = document.createElement('style')
-  // Toolbar styles mirror mesurer's toolbar.tsx:
-  //   - white bg, rounded-[12px], p-1
-  //   - shadow: 0px 0px .5px rgba(0,0,0,.18), 0px 3px 8px rgba(0,0,0,.1), 0px 1px 3px rgba(0,0,0,.1)
-  //   - active button: #0d99ff background, white text
-  //   - inactive hover: bg-black/4 (rgba(0,0,0,0.04))
+  // Dark egaki-inspired toolbar: #1c1c1c bg, white/10 border, pill shape
   styleEl.textContent = `
     *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
     .toolbar {
       display: flex;
       align-items: center;
       gap: 2px;
-      padding: 3px;
-      background: #fff;
-      border-radius: 10px;
+      padding: 3px 8px;
+      background: #1c1c1c;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 9999px;
       pointer-events: all;
       user-select: none;
-      box-shadow: 0px 0px 0.5px rgba(0,0,0,0.18), 0px 3px 8px rgba(0,0,0,0.1), 0px 1px 3px rgba(0,0,0,0.1);
+      box-shadow: 0 12px 60px rgba(0,0,0,0.6), 0 4px 20px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.15);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
-    .divider {
+    .separator {
       width: 1px;
-      height: 12px;
-      background: rgba(0, 0, 0, 0.08);
-      margin: 0 1px;
+      height: 16px;
+      background: rgba(255,255,255,0.15);
+      margin: 0 2px;
       flex-shrink: 0;
     }
     .btn {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 26px;
-      height: 26px;
+      width: 28px;
+      height: 28px;
       border: none;
-      border-radius: 7px;
+      border-radius: 8px;
       background: transparent;
-      color: #000;
+      color: rgba(161,161,170,1);
       cursor: pointer;
-      transition: background 0.1s;
+      transition: background 0.15s, color 0.15s;
       padding: 0;
       flex-shrink: 0;
       outline: none;
     }
     .btn:hover {
-      background: rgba(0, 0, 0, 0.04);
+      background: rgba(255,255,255,0.08);
+      color: rgba(228,228,231,1);
     }
     .btn.active {
-      background: #0d99ff;
+      background: rgba(255,255,255,0.12);
       color: #fff;
     }
     .btn.active:hover {
-      background: #0d99ff;
-      filter: brightness(1.05);
+      background: rgba(255,255,255,0.18);
     }
-    /* When active, the logo inner cursor path needs to match the blue bg
-       so it appears as a "cutout" through the white outer shape */
-    .btn.active .logo-inner { fill: #0d99ff; }
+    .drag-handle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 28px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: rgba(161,161,170,0.5);
+      cursor: grab;
+      transition: background 0.15s, color 0.15s;
+      padding: 0;
+      flex-shrink: 0;
+      outline: none;
+    }
+    .drag-handle:hover {
+      background: rgba(255,255,255,0.08);
+      color: rgba(161,161,170,0.8);
+    }
+    .drag-handle:active, .drag-handle.dragging {
+      cursor: grabbing;
+      color: rgba(228,228,231,0.9);
+    }
+    .record-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: rgba(161,161,170,1);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      padding: 4px 10px;
+      font-size: 13px;
+      font-weight: 500;
+      outline: none;
+      white-space: nowrap;
+      font-family: inherit;
+    }
+    .record-btn:hover {
+      background: rgba(255,255,255,0.08);
+      color: rgba(228,228,231,1);
+    }
+    .record-btn.active {
+      color: rgba(248,113,113,0.9);
+    }
+    .record-btn.active:hover {
+      background: rgba(239,68,68,0.15);
+    }
     .toast {
       position: fixed;
       background: #0f172a;
@@ -464,37 +542,71 @@ export function initPlaywriterToolbar(): void {
 
   // ── SVG icon strings (defined inside function — required for func injection) ─
 
-  // Playwriter logo-square icon (inlined from website/public/logo-square.svg)
-  const CLIPBOARD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 424 424" aria-hidden="true"><path d="M 0 212 C 0 112.063 0 62.095 31.037 31.037 C 62.116 0 112.063 0 212 0 C 311.937 0 361.905 0 392.942 31.037 C 424 62.116 424 112.063 424 212 C 424 311.937 424 361.905 392.942 392.942 C 361.926 424 311.937 424 212 424 C 112.063 424 62.095 424 31.037 392.942 C 0 361.926 0 311.937 0 212" fill="currentColor"/><path class="logo-inner" d="M 225.732 260.521 L 277.905 312.673 C 283.311 318.1 286.003 320.793 289.014 322.043 C 293.042 323.718 297.557 323.718 301.585 322.043 C 304.596 320.793 307.309 318.1 312.694 312.694 C 318.1 307.288 320.793 304.596 322.043 301.585 C 323.722 297.563 323.722 293.036 322.043 289.014 C 320.793 286.003 318.1 283.29 312.694 277.905 L 260.521 225.732 L 276.442 209.789 C 292.766 193.465 300.907 185.325 298.999 176.548 C 297.07 167.792 286.237 163.785 264.591 155.814 L 192.384 129.208 C 149.2 113.308 127.618 105.358 116.488 116.488 C 105.358 127.618 113.308 149.2 129.208 192.384 L 155.814 264.591 C 163.785 286.237 167.792 297.07 176.548 298.999 C 185.303 300.928 193.465 292.766 209.789 276.442 Z" fill="white"/></svg>`
+  // Playwriter logo with cutout cursor (fill-rule evenodd punches a hole through the icon)
+  const PIN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 424 424" aria-hidden="true"><path fill-rule="evenodd" d="M 0 212 C 0 112.063 0 62.095 31.037 31.037 C 62.116 0 112.063 0 212 0 C 311.937 0 361.905 0 392.942 31.037 C 424 62.116 424 112.063 424 212 C 424 311.937 424 361.905 392.942 392.942 C 361.926 424 311.937 424 212 424 C 112.063 424 62.095 424 31.037 392.942 C 0 361.926 0 311.937 0 212 Z M 225.732 260.521 L 277.905 312.673 C 283.311 318.1 286.003 320.793 289.014 322.043 C 293.042 323.718 297.557 323.718 301.585 322.043 C 304.596 320.793 307.309 318.1 312.694 312.694 C 318.1 307.288 320.793 304.596 322.043 301.585 C 323.722 297.563 323.722 293.036 322.043 289.014 C 320.793 286.003 318.1 283.29 312.694 277.905 L 260.521 225.732 L 276.442 209.789 C 292.766 193.465 300.907 185.325 298.999 176.548 C 297.07 167.792 286.237 163.785 264.591 155.814 L 192.384 129.208 C 149.2 113.308 127.618 105.358 116.488 116.488 C 105.358 127.618 113.308 149.2 129.208 192.384 L 155.814 264.591 C 163.785 286.237 167.792 297.07 176.548 298.999 C 185.303 300.928 193.465 292.766 209.789 276.442 Z" fill="currentColor"/></svg>`
 
   // Lucide x icon
   const CLOSE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`
 
+  // 6-dot grip for dragging (2 columns x 3 rows)
+  const DRAG_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="14" viewBox="0 0 8 14" fill="currentColor" aria-hidden="true"><circle cx="2" cy="2" r="1.3"/><circle cx="6" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="6" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="6" cy="12" r="1.3"/></svg>`
+
+  // Record circle icon (red filled circle)
+  const RECORD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="#ef4444"/></svg>`
+
+  // Stop square icon (red filled square)
+  const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" fill="#ef4444"/></svg>`
+
   // ── Build toolbar buttons ──────────────────────────────────────────────────
 
-  // Clipboard / pin element button
+  // Pin element button
   pinBtn = document.createElement('button')
   pinBtn.className = 'btn'
-  pinBtn.setAttribute(
-    'aria-label',
-    'Pin element — click any element to copy inspection code for a playwriter -e call',
-  )
-  pinBtn.setAttribute('title', 'Pin element (click to copy inspection code)')
-  pinBtn.innerHTML = CLIPBOARD_SVG
+  pinBtn.setAttribute('title', 'Pin element \u2014 click any element on the page to copy a playwriter inspection command to clipboard')
+  pinBtn.innerHTML = PIN_SVG
   pinBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation()
     setPinMode(!pinModeActive)
   })
 
-  const dividerEl = document.createElement('div')
-  dividerEl.className = 'divider'
-  dividerEl.setAttribute('aria-hidden', 'true')
+  const sep1 = document.createElement('div')
+  sep1.className = 'separator'
+
+  // Record / stop button (always visible, changes icon + label based on state)
+  const recordBtn = document.createElement('button')
+  recordBtn.className = 'record-btn'
+
+  function updateRecordBtn(): void {
+    if (isRecording) {
+      recordBtn.innerHTML = STOP_SVG + ' <span>Recording skill\u2026</span>'
+      recordBtn.setAttribute('title', 'Stop recording \u2014 copies a prompt for your agent to analyze the recorded workflow and create a skill')
+      recordBtn.classList.add('active')
+    } else {
+      recordBtn.innerHTML = RECORD_SVG + ' <span>Record</span>'
+      recordBtn.setAttribute('title', 'Start recording your actions as a skill \u2014 clicks, navigation, and form inputs are captured for an agent to replay')
+      recordBtn.classList.remove('active')
+    }
+  }
+  updateRecordBtn()
+
+  recordBtn.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation()
+    if (isRecording) {
+      // Stop recording and copy analysis prompt to clipboard
+      window.__playwriterToolbarStopRecording?.()
+    } else {
+      // Start recording via relay
+      window.__playwriterToolbarStartRecording?.()
+    }
+  })
+
+  const sep2 = document.createElement('div')
+  sep2.className = 'separator'
 
   // Close button
   const closeBtn = document.createElement('button')
   closeBtn.className = 'btn'
-  closeBtn.setAttribute('aria-label', 'Close Playwriter toolbar')
-  closeBtn.setAttribute('title', 'Close toolbar')
+  closeBtn.setAttribute('title', 'Hide toolbar')
   closeBtn.innerHTML = CLOSE_SVG
   closeBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation()
@@ -502,12 +614,82 @@ export function initPlaywriterToolbar(): void {
     host.style.display = 'none'
   })
 
-  toolbarEl.appendChild(pinBtn)
-  toolbarEl.appendChild(dividerEl)
-  toolbarEl.appendChild(closeBtn)
+  // Drag handle
+  const dragHandle = document.createElement('div')
+  dragHandle.className = 'drag-handle'
+  dragHandle.setAttribute('title', 'Drag to reposition')
+  dragHandle.innerHTML = DRAG_SVG
+
+  // ── Drag behavior ─────────────────────────────────────────────────────────
+
+  let dragOffset = { x: 0, y: 0 }
+
+  function onDragMouseDown(e: MouseEvent): void {
+    e.preventDefault()
+    e.stopPropagation()
+    isDragging = true
+    dragHandle.classList.add('dragging')
+    const hostRect = host.getBoundingClientRect()
+    // Offset from the center of the toolbar (since transform:translateX(-50%))
+    dragOffset.x = e.clientX - (hostRect.left + hostRect.width / 2)
+    dragOffset.y = e.clientY - hostRect.top
+    document.addEventListener('mousemove', onDragMouseMove, true)
+    document.addEventListener('mouseup', onDragMouseUp, true)
+  }
+
+  function onDragMouseMove(e: MouseEvent): void {
+    if (!isDragging) return
+    // Use rounded pixel values during drag to avoid sub-pixel jitter from
+    // percentage + translateX(-50%) rounding on each frame.
+    const leftPx = Math.round(e.clientX - dragOffset.x)
+    const topPx = Math.round(e.clientY - dragOffset.y)
+    const clampedLeft = Math.max(0, Math.min(window.innerWidth, leftPx))
+    const clampedTop = Math.max(0, Math.min(window.innerHeight - 40, topPx))
+    host.style.left = clampedLeft + 'px'
+    host.style.top = clampedTop + 'px'
+  }
+
+  function onDragMouseUp(): void {
+    if (!isDragging) return
+    isDragging = false
+    dragHandle.classList.remove('dragging')
+    document.removeEventListener('mousemove', onDragMouseMove, true)
+    document.removeEventListener('mouseup', onDragMouseUp, true)
+    // Convert final pixel position to viewport percentages for persistence
+    const leftPct = (parseFloat(host.style.left) / window.innerWidth) * 100
+    const topPct = (parseFloat(host.style.top) / window.innerHeight) * 100
+    if (!isNaN(leftPct) && !isNaN(topPct)) {
+      savePosition(leftPct, topPct)
+    }
+  }
+
+  dragHandle.addEventListener('mousedown', onDragMouseDown)
+
+  // ── Render toolbar ──────────────────────────────────────────────────────────
+
+  function renderToolbar(): void {
+    toolbarEl.innerHTML = ''
+    toolbarEl.appendChild(pinBtn)
+    toolbarEl.appendChild(sep1)
+    toolbarEl.appendChild(recordBtn)
+    toolbarEl.appendChild(sep2)
+    toolbarEl.appendChild(closeBtn)
+    toolbarEl.appendChild(dragHandle)
+  }
+
+  renderToolbar()
 
   // Attach host to the document (appended to <html> so it survives body rewrites)
   document.documentElement.appendChild(host)
+
+  // ── Recording state callback (called by background.ts via executeScript) ───
+
+  window.__playwriterToolbarSetRecording = function (recording: boolean): void {
+    if (isRecording === recording) return
+    isRecording = recording
+    if (recording) setPinMode(false)
+    updateRecordBtn()
+  }
 
   // ── Cleanup hook called by background.ts on tab disconnect ─────────────────
 
@@ -517,6 +699,9 @@ export function initPlaywriterToolbar(): void {
     host.remove()
     delete window.__playwriterToolbarInstalled
     delete window.__playwriterToolbarDestroy
+    delete window.__playwriterToolbarSetRecording
+    delete window.__playwriterToolbarStopRecording
+    delete window.__playwriterToolbarStartRecording
     delete window.__playwriterPinCount
   }
 }
