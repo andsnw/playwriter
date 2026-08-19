@@ -149,7 +149,7 @@ describe('action recording', () => {
         "await page1.getByRole('button', { name: 'Submit order' }).click();",
         "await page1.getByRole('textbox', { name: 'Email address' }).click();",
         "await page1.getByRole('textbox', { name: 'Email address' }).fill('hi@example.com');",
-        "await page1.getByRole('button', { name: 'Attachment' }).fill('C:\\\\fakepath\\\\recorder-test-attachment.txt');",
+        "await page1.getByRole('button', { name: 'Attachment' }).setInputFiles('recorder-test-attachment.txt');",
         "await page1.getByRole('button', { name: 'Done!' }).click();",
       ]
     `)
@@ -160,13 +160,10 @@ describe('action recording', () => {
     expect(types.has('snapshot-diff')).toBe(false)
     expect(types.has('storage')).toBe(false)
     expect(types.has('focus')).toBe(false)
+    expect(types.has('screenshot')).toBe(false)
     const clickActions = events.filter((e) => e.type === 'action' && e.action === 'click')
     expect(clickActions.length).toBeGreaterThan(0)
-    expect(typeof clickActions[0].x).toBe('number')
-    expect(typeof clickActions[0].y).toBe('number')
-    const screenshots = events.filter((e) => e.type === 'screenshot')
-    expect(screenshots.length).toBeGreaterThan(0)
-    expect(fs.existsSync(String(screenshots[0].path))).toBe(true)
+    expect(clickActions[0].x).toBeUndefined()
     // console.error was recorded
     const consoleEvents = events.filter((e) => e.type === 'console')
     expect(JSON.stringify(consoleEvents)).toContain('recorder-test-error')
@@ -176,9 +173,8 @@ describe('action recording', () => {
     expect(fetchEvents.every((e) => e.method === 'POST')).toBe(true)
     expect(JSON.stringify(fetchEvents)).not.toContain('get-should-be-dropped')
     expect(JSON.stringify(fetchEvents)).toContain('Example Domain')
-    // file chosen in input[type=file] was detected
-    const uploadEvents = events.filter((e) => e.type === 'file-upload')
-    expect(JSON.stringify(uploadEvents)).toContain('recorder-test-attachment.txt')
+    const uploadActions = events.filter((e) => e.type === 'action' && String(e.code).includes('setInputFiles'))
+    expect(JSON.stringify(uploadActions)).toContain('recorder-test-attachment.txt')
     // every event has a sequential id for the drill-down view
     expect(events.map((e) => e.id)).toEqual(events.map((_, i) => i + 1))
     // thin projection replaces heavy payloads with sizes

@@ -1,9 +1,7 @@
 // Action recording for the `playwriter recorder` CLI feature.
 //
 // Playwright's API-mode recorder is the only action source. We persist those
-// actions, attach click x/y + a highlighted screenshot, and record mutating
-// xhr/fetch. Heavy post-action work (aria snapshots, cookies, storage, focus)
-// was removed: it froze the page on every keystroke via CDP.
+// actions plus mutating xhr/fetch. No post-action page work: it froze typing.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -113,7 +111,6 @@ export class RecordingError extends Error {
 // be passed to read the full details on demand.
 const TRACKED_RESOURCE_TYPES = new Set(['xhr', 'fetch'])
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
-const POLL_INTERVAL_MS = 1500
 const PERSIST_DEBOUNCE_MS = 50
 const MAX_EVENTS = 10000
 const MAX_RESPONSE_BODY_CHARS = 50000
@@ -128,7 +125,6 @@ function truncate(value: string, max: number): string {
   return value.slice(0, max) + `… (${value.length - max} more chars)`
 }
 
-/** Short stable fingerprint for change detection without storing the value */
 // Thin projection of an event for the default `recorder events` timeline view.
 // Heavy payloads are replaced by sizes (or key lists) so the whole timeline is
 // cheap to read; full details are fetched per event id.
@@ -143,33 +139,10 @@ export function projectThinEvent(event: RecordedEvent): RecordedEvent {
   }
   replaceWithSize('responseBody', 'responseBodySize')
   replaceWithSize('postData', 'postDataSize')
-  if (event.type === 'snapshot-diff' && typeof event.content === 'string') {
-    delete thin.content
-    thin.contentSize = event.content.length
-    thin.preview = truncate(event.content.split('\n').slice(0, 5).join('\n'), 300)
-  }
-  if (event.type === 'storage') {
-    for (const field of ['added', 'changed'] as const) {
-      const value = event[field]
-      if (value && typeof value === 'object') {
-        delete thin[field]
-        thin[`${field}Keys`] = Object.keys(value)
-      }
-    }
-  }
   if ((event.type === 'console' || event.type === 'page-error') && typeof event.text === 'string') {
     thin.text = truncate(event.text, 200)
   }
   return thin
-}
-
-interface PointerPoint {
-  x: number
-  y: number
-  clientX: number
-  clientY: number
-  scrollX: number
-  scrollY: number
 }
 
 interface PageHandlers {
@@ -205,11 +178,6 @@ export class ActionRecorder {
   private captureChain: Promise<void> = Promise.resolve()
   private pendingCaptures = 0
   private persistTimer: ReturnType<typeof setTimeout> | null = null
-
-  private lastFileInputsByPage = new WeakMap<Page, string>()
-  private lastScrollByPage = new WeakMap<Page, { x: number; y: number }>()
-  private lastPolledUrlByPage = new WeakMap<Page, string>()
-  private pollTimer: ReturnType<typeof setInterval> | null = null
   private pageHandlers = new Map<Page, PageHandlers>()
   private onPageHandler: ((page: Page) => void) | null = null
   private onContextCloseHandler: (() => void) | null = null
@@ -358,15 +326,6 @@ export class ActionRecorder {
       this.attachPageListeners(page)
     }
 
-    // Poll all pages for SPA url changes and wheel scrolling that never
-    // produce recorder actions. Cheap: one evaluate per page per interval.
-    this.pollTimer = setInterval(() => {
-      if (this.pendingCaptures > 3) {
-        return
-      }
-      this.enqueueCapture(() => this.pollPages())
-    }, POLL_INTERVAL_MS)
-
     this.writeEvent({
       type: 'recording-started',
       startedAt: new Date(this.startedAt).toISOString(),
@@ -382,10 +341,6 @@ export class ActionRecorder {
     }
     // 1. Stop accepting new input: sink handlers and listeners check state
     this.state = 'stopping'
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer)
-      this.pollTimer = null
-    }
     this.detachListeners()
     this.flushPersist()
     // 2. Let in-flight captures finish. New captures can't be enqueued anymore.
@@ -443,7 +398,6 @@ export class ActionRecorder {
           return
         }
         this.writeEvent({ type: 'navigation', url: frame.url() })
-        this.lastPolledUrlByPage.set(page, frame.url())
       },
       close: () => {
         if (this.state !== 'recording') {
@@ -512,14 +466,19 @@ export class ActionRecorder {
       : undefined
     const actionName = actionInContext.action.name
     const clickCount = typeof actionInContext.action.clickCount === 'number' ? actionInContext.action.clickCount : undefined
-    const pointer = pointerFromAction(actionInContext.action)
-    // actionUpdated = same fill, next keystroke. Edit the last action in place.
-    // Do not key by pageUrl: SPA pushState mid-fill would split one fill in two.
+    const pageAlias = actionInContext.frame?.pageAlias
+    const framePath = actionInContext.frame?.framePath?.length ? actionInContext.frame.framePath : undefined
+    // actionUpdated = same fill / dblclick. Only edit if it is the same action.
     if (isUpdate) {
       const last = this.lastAction()
-      if (last && typeof last.id === 'number') {
+      if (
+        last &&
+        typeof last.id === 'number' &&
+        last.action === actionName &&
+        last.selector === selector &&
+        last.pageAlias === pageAlias
+      ) {
         last.code = codeText
-        last.selector = selector
         last.pageUrl = safePageUrl(page)
         if (clickCount !== undefined) {
           last.clickCount = clickCount
@@ -528,24 +487,15 @@ export class ActionRecorder {
         return
       }
     }
-    const actionId = this.writeEvent({
+    this.writeEvent({
       type: 'action',
       action: actionName,
       code: codeText,
       selector,
       clickCount,
-      ...(actionName === 'click' && pointer ? pointer : {}),
-      pageAlias: actionInContext.frame?.pageAlias,
-      framePath: actionInContext.frame?.framePath?.length ? actionInContext.frame.framePath : undefined,
+      pageAlias,
+      framePath,
       pageUrl: safePageUrl(page),
-    })
-    if (actionName === 'click') {
-      this.enqueueCapture(() => {
-        return this.captureClickScreenshot({ page, actionId, selector, pointer })
-      })
-    }
-    this.enqueueCapture(() => {
-      return this.captureFileUploads(page, actionId)
     })
   }
 
@@ -580,126 +530,6 @@ export class ActionRecorder {
       } finally {
         this.pendingCaptures--
       }
-    })
-  }
-
-  // File inputs can't be recorded as recorder actions (the OS file chooser is
-  // native), so detect chosen files by diffing input[type=file] states after
-  // each action. Only file names are visible to page JS, never full paths.
-  private async captureFileUploads(page: Page, afterActionId: number) {
-    if (page.isClosed()) {
-      return
-    }
-    const inputs = await page
-      .evaluate(() => {
-        return [...document.querySelectorAll('input[type=file]')].map((el) => {
-          // HTMLInputElement is not in this tsconfig's ambient DOM types
-          const input = el as unknown as { id: string; name: string; getAttribute(name: string): string | null; files: ArrayLike<{ name: string }> | null }
-          return {
-            id: input.id || undefined,
-            name: input.name || undefined,
-            ariaLabel: input.getAttribute('aria-label') || undefined,
-            files: Array.from(input.files || []).map((f) => f.name),
-          }
-        })
-      })
-      .catch(() => null)
-    if (!inputs) {
-      return
-    }
-    const currentJson = JSON.stringify(inputs)
-    const previous = this.lastFileInputsByPage.get(page)
-    this.lastFileInputsByPage.set(page, currentJson)
-    if (previous === currentJson) {
-      return
-    }
-    const withFiles = inputs.filter((input) => input.files.length > 0)
-    if (withFiles.length === 0) {
-      return
-    }
-    this.writeEvent({ type: 'file-upload', afterActionId, inputs: withFiles, pageUrl: safePageUrl(page) })
-  }
-
-  private async captureClickScreenshot({
-    page,
-    actionId,
-    selector,
-    pointer,
-  }: {
-    page: Page
-    actionId: number
-    selector: string | undefined
-    pointer: PointerPoint | undefined
-  }) {
-    if (page.isClosed()) {
-      return
-    }
-    const box = selector
-      ? await page
-          .locator(selector)
-          .first()
-          .boundingBox()
-          .catch(() => {
-            return null
-          })
-      : null
-    const rect = box
-      ? { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) }
-      : pointer
-        ? { x: pointer.clientX - 12, y: pointer.clientY - 12, width: 24, height: 24 }
-        : null
-    const dir = path.join(os.tmpdir(), 'playwriter-recorder', this.recordingId)
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const screenshotPath = path.join(dir, `${actionId}.png`)
-    try {
-      if (rect) {
-        await page
-          .evaluate((highlight) => {
-            const existing = document.getElementById('__playwriter_click_rect__')
-            existing?.remove()
-            const el = document.createElement('div')
-            el.id = '__playwriter_click_rect__'
-            el.style.cssText = [
-              'position:fixed',
-              `left:${highlight.x}px`,
-              `top:${highlight.y}px`,
-              `width:${highlight.width}px`,
-              `height:${highlight.height}px`,
-              'border:3px solid #ff2d55',
-              'box-shadow:0 0 0 2px #fff',
-              'pointer-events:none',
-              'z-index:2147483647',
-            ].join(';')
-            document.documentElement.appendChild(el)
-          }, rect)
-          .catch(() => {})
-      }
-      await Promise.race([
-        page.screenshot({ path: screenshotPath, scale: 'css' }),
-        new Promise<void>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error('click screenshot timed out'))
-          }, 8000).unref?.()
-        }),
-      ])
-    } catch (error) {
-      this.logger.error('[record] click screenshot failed:', error)
-    } finally {
-      await page.evaluate(() => {
-        document.getElementById('__playwriter_click_rect__')?.remove()
-      }).catch(() => {})
-    }
-    if (!fs.existsSync(screenshotPath)) {
-      return
-    }
-    this.writeEvent({
-      type: 'screenshot',
-      afterActionId: actionId,
-      path: screenshotPath,
-      x: pointer?.x,
-      y: pointer?.y,
-      ...(rect || {}),
-      pageUrl: safePageUrl(page),
     })
   }
 
@@ -752,34 +582,6 @@ export class ActionRecorder {
     })
   }
 
-  private async pollPages() {
-    for (const page of this.context.pages()) {
-      if (page.isClosed()) {
-        continue
-      }
-      // Detect SPA url changes (pushState) that don't fire framenavigated
-      const url = safePageUrl(page)
-      const lastUrl = this.lastPolledUrlByPage.get(page)
-      if (lastUrl !== undefined && lastUrl !== url) {
-        this.writeEvent({ type: 'url-changed', url, previousUrl: lastUrl })
-      }
-      this.lastPolledUrlByPage.set(page, url)
-
-      const scroll = await page
-        .evaluate(() => {
-          return { x: Math.round(window.scrollX), y: Math.round(window.scrollY) }
-        })
-        .catch(() => null)
-      if (!scroll) {
-        continue
-      }
-      const lastScroll = this.lastScrollByPage.get(page)
-      this.lastScrollByPage.set(page, scroll)
-      if (lastScroll && (Math.abs(lastScroll.x - scroll.x) > 50 || Math.abs(lastScroll.y - scroll.y) > 50)) {
-        this.writeEvent({ type: 'scroll', x: scroll.x, y: scroll.y, pageUrl: url })
-      }
-    }
-  }
 }
 
 function safePageUrl(page: Page): string {
@@ -787,20 +589,6 @@ function safePageUrl(page: Page): string {
     return page.url()
   } catch {
     return ''
-  }
-}
-
-function pointerFromAction(action: ActionInContext['action']): PointerPoint | undefined {
-  if (typeof action.x !== 'number' || typeof action.y !== 'number') {
-    return undefined
-  }
-  return {
-    x: action.x,
-    y: action.y,
-    clientX: typeof action.clientX === 'number' ? action.clientX : action.x,
-    clientY: typeof action.clientY === 'number' ? action.clientY : action.y,
-    scrollX: typeof action.scrollX === 'number' ? action.scrollX : 0,
-    scrollY: typeof action.scrollY === 'number' ? action.scrollY : 0,
   }
 }
 

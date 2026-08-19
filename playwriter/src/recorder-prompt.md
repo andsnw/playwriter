@@ -1,20 +1,21 @@
 # Recording is active — how to turn it into a skill
 
 The user is now performing a workflow manually in their browser. Every click, fill,
-keypress, navigation, mutating xhr/fetch, scroll, and click screenshot is being
-written to a JSON event file.
+keypress, navigation, and mutating xhr/fetch is being written to a JSON event file.
 
 The end goal: a **skill** (SKILL.md + importable utils script) that automates the
 same flow with playwriter. Follow the phases below in order.
 
 ## Phase 1: while the user records
 
-**Wait.** Do not run playwriter commands against this session while recording — it
-would pollute the events. While waiting, ask the user (if not already known):
+Stay with the user. Ask (if not already known):
 
 - What is the goal of this workflow, in one sentence?
 - What inputs vary between runs (e.g. product name, patient DOB, search query)?
 - What is the expected output or end state (data extracted, form submitted, email sent)?
+
+You may run playwriter commands on this session if the user asks (snapshot, inspect,
+click something). If they did not ask, ask first. Do not drive the workflow yourself.
 
 Tell the user: take your time, pauses and mistakes are fine. Dead ends can be
 filtered out later, so they should just use the app normally.
@@ -53,9 +54,6 @@ playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // .signal /
 # full details of specific events (untruncated bodies, full snapshot diffs)
 playwriter recorder events 4 7 12
 
-# click screenshots (rectangle marks the clicked box)
-playwriter recorder events | jq -r 'select(.type == "screenshot") | [.id, .afterActionId, .path, .x, .y] | @tsv'
-
 # only the recorded actions with their locator code
 playwriter recorder events | jq -r 'select(.type == "action") | .code'
 
@@ -71,20 +69,14 @@ playwriter recorder events --full
 ```
 
 Event types: `recording-started`, `action` (with `.code` = playwright locator code like
-`await page.getByRole('button', { name: 'Submit' }).click()`), `screenshot` (click
-highlight PNG), `signal` (navigation committed after an action), `navigation`,
-`url-changed` (SPA pushState), `page-opened`, `page-closed`, `network` (POST/PUT/PATCH/
-DELETE xhr/fetch only, with truncated `responseBody` for textual responses),
-`download` (url + suggested filename), `file-upload` (file names chosen in
-`input[type=file]`), `console` (page console errors/warnings), `page-error`, `scroll`,
-`recording-stopped`.
+`await page.getByRole('button', { name: 'Submit' }).click()`), `signal` (navigation
+committed after an action), `navigation`, `page-opened`, `page-closed`, `network`
+(POST/PUT/PATCH/DELETE xhr/fetch only, with truncated `responseBody` for textual
+responses), `download` (url + suggested filename), `console` (page console
+errors/warnings), `page-error`, `recording-stopped`.
 
 Important fields:
 
-- Click actions include `x`/`y` (document page coords), `clientX`/`clientY`, and
-  `scrollX`/`scrollY`. A `screenshot` event with `afterActionId` points at a PNG
-  that draws a rectangle on the clicked box. Read that image when a locator is
-  ambiguous (giant table cell, overlapping controls).
 - `action.code` uses page aliases: `page` is the first page, `page1`/`page2`/... are
   pages opened later (popups, new tabs). The `pageAlias` field on each action tells you
   which page it targeted. When writing utils functions, map each alias to a function
@@ -92,9 +84,8 @@ Important fields:
   `page1` into code where only `page` exists.
 - Network events are mutations only. GET document/xhr/fetch is dropped. Thin view
   shows `postDataSize`/`responseBodySize`; drill into the event id for the values.
-- A native file chooser shows up as a `fill` action with a fake `C:\fakepath\...` value;
-  ignore that action and use the `file-upload` event's real file names instead. Replay
-  uploads with `locator.setInputFiles(path)` and make the path a skill parameter.
+- File picks show up as `setInputFiles` actions with the file name. Replay with
+  `locator.setInputFiles(path)` and make the path a skill parameter.
 
 ## Phase 4: prototype against the live page
 
@@ -107,9 +98,8 @@ playwriter -s <session> -e "await page.getByRole('button', { name: 'Submit' }).c
 ```
 
 Loop: snapshot → run one recorded action → snapshot again to confirm the expected
-change. Use the click `screenshot` when the locator is unclear. Drop actions the
-user flagged as mistakes. This grounds the skill in what actually works, instead of
-guessing.
+change. Drop actions the user flagged as mistakes. This grounds the skill in what
+actually works, instead of guessing.
 
 ## Phase 5: ask the user before writing
 
