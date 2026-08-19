@@ -17,6 +17,7 @@
     "dark": "#FF9500"
   },
   "knownPaths": ["/README", "/api/*", "/login", "/dashboard", "/device"],
+  "decorativeLines": "none",
   "navigation": {
     "tabs": [
       {
