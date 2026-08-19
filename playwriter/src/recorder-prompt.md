@@ -1,8 +1,8 @@
 # Recording is active — how to turn it into a skill
 
 The user is now performing a workflow manually in their browser. Every click, fill,
-keypress, navigation, network request, cookie/storage change, focus change, scroll
-and aria snapshot diff is being written to a JSON event file.
+keypress, navigation, mutating xhr/fetch, scroll, and click screenshot is being
+written to a JSON event file.
 
 The end goal: a **skill** (SKILL.md + importable utils script) that automates the
 same flow with playwriter. Follow the phases below in order.
@@ -53,52 +53,45 @@ playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // .signal /
 # full details of specific events (untruncated bodies, full snapshot diffs)
 playwriter recorder events 4 7 12
 
-# state changes caused by action 3 (snapshot diff, cookies, storage, focus)
-playwriter recorder events | jq 'select(.afterActionId == 3)'
+# click screenshots (rectangle marks the clicked box)
+playwriter recorder events | jq -r 'select(.type == "screenshot") | [.id, .afterActionId, .path, .x, .y] | @tsv'
 
 # only the recorded actions with their locator code
 playwriter recorder events | jq -r 'select(.type == "action") | .code'
 
-# find the site's JSON APIs: thin view shows sizes, then drill into the ids
-playwriter recorder events | jq -r 'select(.type == "network" and .responseBodySize) | [.id, .method, .status, .url, .responseBodySize] | @tsv'
+# mutating xhr/fetch only (POST/PUT/PATCH/DELETE). Thin view shows sizes.
+playwriter recorder events | jq -r 'select(.type == "network") | [.id, .method, .status, .url, .responseBodySize] | @tsv'
 playwriter recorder events 14 15        # → full request postData + responseBody
 
 # downloads, uploads, console errors
 playwriter recorder events | jq 'select(.type == "download" or .type == "file-upload" or .type == "console" or .type == "page-error")'
-
-# cookie / storage changes (login state, tokens, feature flags)
-playwriter recorder events | jq 'select(.type == "cookies" or .type == "storage")'
-
-# snapshot-diff previews are in the thin view; drill into an id for the full diff
-playwriter recorder events | jq -r 'select(.type == "snapshot-diff") | [.id, .preview] | @tsv'
 
 # escape hatch: full fidelity for the whole timeline (can be very large)
 playwriter recorder events --full
 ```
 
 Event types: `recording-started`, `action` (with `.code` = playwright locator code like
-`await page.getByRole('button', { name: 'Submit' }).click()`), `signal` (navigation
-committed after an action), `navigation`, `url-changed` (SPA pushState), `page-opened`,
-`page-closed`, `network` (with truncated `responseBody` for textual xhr/fetch responses),
+`await page.getByRole('button', { name: 'Submit' }).click()`), `screenshot` (click
+highlight PNG), `signal` (navigation committed after an action), `navigation`,
+`url-changed` (SPA pushState), `page-opened`, `page-closed`, `network` (POST/PUT/PATCH/
+DELETE xhr/fetch only, with truncated `responseBody` for textual responses),
 `download` (url + suggested filename), `file-upload` (file names chosen in
-`input[type=file]`), `console` (page console errors/warnings), `page-error`, `cookies`,
-`storage`, `focus`, `scroll`, `snapshot-diff`, `recording-stopped`.
+`input[type=file]`), `console` (page console errors/warnings), `page-error`, `scroll`,
+`recording-stopped`.
 
 Important fields:
 
-- Each `action` event has an `actionId`. State-change events (`snapshot-diff`,
-  `cookies`, `storage`, `focus`) carry `afterActionId` linking them to the action that
-  caused them. Captures run asynchronously, so use `afterActionId` (not line order) to
-  associate state changes with actions.
+- Click actions include `x`/`y` (document page coords), `clientX`/`clientY`, and
+  `scrollX`/`scrollY`. A `screenshot` event with `afterActionId` points at a PNG
+  that draws a rectangle on the clicked box. Read that image when a locator is
+  ambiguous (giant table cell, overlapping controls).
 - `action.code` uses page aliases: `page` is the first page, `page1`/`page2`/... are
   pages opened later (popups, new tabs). The `pageAlias` field on each action tells you
   which page it targeted. When writing utils functions, map each alias to a function
   parameter or to the popup returned by `context.waitForEvent('page')` — do not paste
   `page1` into code where only `page` exists.
-- `cookies` events list cookie identities (`name|domain|path`) only; values are never
-  stored (change detection uses hashes). In the thin view, storage diffs show `addedKeys`/
-  `changedKeys` and network events show `postDataSize`/`responseBodySize`; drill into the
-  event id for the actual values.
+- Network events are mutations only. GET document/xhr/fetch is dropped. Thin view
+  shows `postDataSize`/`responseBodySize`; drill into the event id for the values.
 - A native file chooser shows up as a `fill` action with a fake `C:\fakepath\...` value;
   ignore that action and use the `file-upload` event's real file names instead. Replay
   uploads with `locator.setInputFiles(path)` and make the path a skill parameter.
@@ -114,7 +107,7 @@ playwriter -s <session> -e "await page.getByRole('button', { name: 'Submit' }).c
 ```
 
 Loop: snapshot → run one recorded action → snapshot again to confirm the expected
-change (compare with the recorded `snapshot-diff` for that action). Drop actions the
+change. Use the click `screenshot` when the locator is unclear. Drop actions the
 user flagged as mistakes. This grounds the skill in what actually works, instead of
 guessing.
 
@@ -139,12 +132,10 @@ Create two files in the skill directory:
 Frontmatter with `name` and `description` (description states when to load the skill).
 The body explains the flow at a **high level** so an agent can automate it:
 
-- The goal and preconditions — including login state: which cookies/storage keys
-  indicate the user is signed in (take them from the `cookies`/`storage` events)
+- The goal and preconditions, including that playwriter drives an already signed-in browser
 - Numbered steps, each referencing the **locator strings** from the recorded `action` events
-- For each step, the **expected outcome**: url change, key lines from the snapshot diff,
-  or the network request that fires (from `network` events) — this is how the automating
-  agent verifies the step worked
+- For each step, the **expected outcome**: url change, confirmation text, or the
+  mutating network request that fires (from `network` events)
 - Timing notes the user mentioned ("tab takes seconds to load") mapped to explicit waits
 - How to detect overall success (final url, confirmation text in snapshot)
 - How to call the utils functions (see below) instead of re-deriving every locator

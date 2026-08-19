@@ -108,11 +108,12 @@ describe('action recording', () => {
     await clickAt('#email')
     await cdp.send('Input.insertText', { text: 'hi@example.com' })
 
-    // trigger the extra recorded signals: console error, in-page fetch (its
-    // textual response body must be captured), and a file upload
+    // trigger the extra recorded signals: console error, in-page POST fetch
+    // (GET is dropped; only mutating xhr/fetch is recorded), and a file upload
     await cdpPage!.evaluate(async () => {
       console.error('recorder-test-error')
-      await fetch('/').then((r) => r.text())
+      await fetch('/?get-should-be-dropped')
+      await fetch('/', { method: 'POST', body: 'recorder-test' }).then((r) => r.text())
     })
     const tmpFile = path.join(os.tmpdir(), 'recorder-test-attachment.txt')
     fs.writeFileSync(tmpFile, 'hello')
@@ -120,7 +121,7 @@ describe('action recording', () => {
     // another trusted action so the post-action capture picks up the upload diff
     await clickAt('#submit-btn')
 
-    // wait for action coalescing (800ms) + post-action captures to settle
+    // wait for fill-capture debounce + post-action captures to settle
     await new Promise((r) => setTimeout(r, 3000))
 
     // status shows the active recording
@@ -156,20 +157,24 @@ describe('action recording', () => {
     const types = new Set(events.map((e) => e.type))
     expect(types.has('recording-started')).toBe(true)
     expect(types.has('recording-stopped')).toBe(true)
-    // clicking the button mutated the DOM (button text) → snapshot diff
-    expect(types.has('snapshot-diff')).toBe(true)
-    // clicking the button wrote to localStorage → storage event
-    const storageEvents = events.filter((e) => e.type === 'storage' && e.kind === 'localStorage')
-    expect(storageEvents.length).toBeGreaterThan(0)
-    expect(JSON.stringify(storageEvents[0].added)).toContain('submitted')
-    // clicking into the input changed focus
-    expect(types.has('focus')).toBe(true)
+    expect(types.has('snapshot-diff')).toBe(false)
+    expect(types.has('storage')).toBe(false)
+    expect(types.has('focus')).toBe(false)
+    const clickActions = events.filter((e) => e.type === 'action' && e.action === 'click')
+    expect(clickActions.length).toBeGreaterThan(0)
+    expect(typeof clickActions[0].x).toBe('number')
+    expect(typeof clickActions[0].y).toBe('number')
+    const screenshots = events.filter((e) => e.type === 'screenshot')
+    expect(screenshots.length).toBeGreaterThan(0)
+    expect(fs.existsSync(String(screenshots[0].path))).toBe(true)
     // console.error was recorded
     const consoleEvents = events.filter((e) => e.type === 'console')
     expect(JSON.stringify(consoleEvents)).toContain('recorder-test-error')
-    // in-page fetch captured with its textual response body
+    // mutating in-page fetch captured with its textual response body
     const fetchEvents = events.filter((e) => e.type === 'network' && e.resourceType === 'fetch')
     expect(fetchEvents.length).toBeGreaterThan(0)
+    expect(fetchEvents.every((e) => e.method === 'POST')).toBe(true)
+    expect(JSON.stringify(fetchEvents)).not.toContain('get-should-be-dropped')
     expect(JSON.stringify(fetchEvents)).toContain('Example Domain')
     // file chosen in input[type=file] was detected
     const uploadEvents = events.filter((e) => e.type === 'file-upload')
@@ -180,10 +185,6 @@ describe('action recording', () => {
     const thinFetch = projectThinEvent(fetchEvents[0])
     expect(thinFetch.responseBody).toBeUndefined()
     expect(typeof thinFetch.responseBodySize).toBe('number')
-    const thinDiff = projectThinEvent(events.find((e) => e.type === 'snapshot-diff')!)
-    expect(thinDiff.content).toBeUndefined()
-    expect(typeof thinDiff.contentSize).toBe('number')
-    expect(typeof thinDiff.preview).toBe('string')
 
     // stopping again → 404, no active recording
     const stopAgainResponse = await fetch(`${SERVER_URL}/recorder/stop`, {
@@ -210,6 +211,7 @@ describe('action recording', () => {
     const start2 = (await start2Response.json()) as { recordingId: string }
     expect(start2.recordingId).not.toBe(start.recordingId)
 
+    await new Promise((r) => setTimeout(r, 300))
     await clickAt('#submit-btn')
     await new Promise((r) => setTimeout(r, 2000))
 
@@ -227,6 +229,38 @@ describe('action recording', () => {
         "await page1.getByRole('button', { name: 'Done!' }).click();",
       ]
     `)
+
+    // SPA pushState mid-fill must stay one action with the final text
+    const start3Response = await fetch(`${SERVER_URL}/recorder/start`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ sessionId: session.id }),
+    })
+    const start3 = (await start3Response.json()) as { recordingId: string }
+    expect(start3.recordingId).toBeTruthy()
+    await cdpPage!.evaluate(`
+      document.body.innerHTML = '<input id="q" placeholder="Search" type="text" />'
+      const input = document.getElementById('q')
+      input.addEventListener('input', () => {
+        if (input.value.length >= 2) history.pushState({}, '', '/changed')
+      })
+    `)
+    await clickAt('#q')
+    await cdp.send('Input.insertText', { text: 'a' })
+    await new Promise((r) => setTimeout(r, 50))
+    await cdp.send('Input.insertText', { text: 'b' })
+    await new Promise((r) => setTimeout(r, 50))
+    await cdp.send('Input.insertText', { text: 'c' })
+    await new Promise((r) => setTimeout(r, 1500))
+    const stop3Response = await fetch(`${SERVER_URL}/recorder/stop`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({}),
+    })
+    const stop3 = (await stop3Response.json()) as { filePath: string }
+    const events3 = parseRecording(fs.readFileSync(stop3.filePath, 'utf-8'))
+    const fillCodes = events3.filter((e) => e.type === 'action' && e.action === 'fill').map((e) => e.code)
+    expect(fillCodes).toEqual(["await page1.getByRole('textbox', { name: 'Search' }).fill('abc');"])
 
     await browser.close()
   }, 120000)

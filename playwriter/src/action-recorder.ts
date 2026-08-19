@@ -1,38 +1,13 @@
 // Action recording for the `playwriter recorder` CLI feature.
 //
-// Records user interactions (clicks, fills, presses, navigations) plus derived
-// state changes (aria snapshot diffs, network requests, cookie/storage changes,
-// focus and scroll) into a JSON array file that an agent later reads to author
-// a SKILL.md + utils script automating the same flow.
-//
-// The locator strings come from the playwright fork's headless recorder:
-// context._enableRecorder({ mode: 'recording', recorderMode: 'api' }) emits
-// actionAdded/actionUpdated events with generated code like
-// `await page.getByRole('button', { name: 'Submit' }).click()`.
-//
-// The file is an editable array, not jsonl, so actionUpdated (each fill
-// keystroke) mutates the last action in place. No debounce, no pending queue.
-//
-// Design notes:
-// - action events carry an incrementing actionId; async state captures
-//   (snapshot/cookies/storage/focus) reference afterActionId so consumers can
-//   associate state changes with the action that caused them even when events
-//   from a fast action burst interleave.
-// - stop() first stops accepting input, then awaits in-flight captures, so no
-//   events are lost or written after stop.
-// - recordings auto-stop when the browser context closes (extension toggled
-//   off, session reset); the manager is notified via onDidStop.
-// - files are chmod 0600 in a 0700 dir. Values (storage, postData) are
-//   truncated. This matches the existing local logging posture of
-//   ~/.playwriter/cdp.jsonl which already logs all CDP traffic.
-import crypto from 'node:crypto'
+// Playwright's API-mode recorder is the only action source. We persist those
+// actions, attach click x/y + a highlighted screenshot, and record mutating
+// xhr/fetch. Heavy post-action work (aria snapshots, cookies, storage, focus)
+// was removed: it froze the page on every keystroke via CDP.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { BrowserContext, Frame, Page, Request } from '@xmorse/playwright-core'
-import { getAriaSnapshot } from './aria-snapshot.js'
-import { getCDPSessionForPage } from './cdp-session.js'
-import { createSmartDiff } from './diff-utils.js'
 
 // Read at call time (not module load) so tests can point recordings at a temp
 // dir via PLAYWRITER_RECORDINGS_DIR without polluting ~/.playwriter
@@ -136,14 +111,11 @@ export class RecordingError extends Error {
 // happens at read time: `recorder events` prints a thin projection (heavy
 // fields replaced by sizes, see projectThinEvent) and specific event ids can
 // be passed to read the full details on demand.
-const TRACKED_RESOURCE_TYPES = new Set(['document', 'xhr', 'fetch'])
+const TRACKED_RESOURCE_TYPES = new Set(['xhr', 'fetch'])
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const POLL_INTERVAL_MS = 1500
-const MAX_SNAPSHOT_DIFF_CHARS = 50000
-const MAX_VALUE_CHARS = 1000
+const PERSIST_DEBOUNCE_MS = 50
 const MAX_EVENTS = 10000
-// Response bodies enable use cases like reverse-engineering a typed API client
-// from a recorded session. Only textual bodies (json/text/xml/form) of
-// xhr/fetch requests are captured.
 const MAX_RESPONSE_BODY_CHARS = 50000
 const MAX_POST_DATA_CHARS = 10000
 const MAX_CONSOLE_TEXT_CHARS = 2000
@@ -157,10 +129,6 @@ function truncate(value: string, max: number): string {
 }
 
 /** Short stable fingerprint for change detection without storing the value */
-function fingerprint(value: string): string {
-  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 12)
-}
-
 // Thin projection of an event for the default `recorder events` timeline view.
 // Heavy payloads are replaced by sizes (or key lists) so the whole timeline is
 // cheap to read; full details are fetched per event id.
@@ -195,14 +163,13 @@ export function projectThinEvent(event: RecordedEvent): RecordedEvent {
   return thin
 }
 
-interface FocusDescriptor {
-  tag: string
-  id?: string
-  role?: string
-  name?: string
-  placeholder?: string
-  ariaLabel?: string
-  text?: string
+interface PointerPoint {
+  x: number
+  y: number
+  clientX: number
+  clientY: number
+  scrollX: number
+  scrollY: number
 }
 
 interface PageHandlers {
@@ -232,19 +199,13 @@ export class ActionRecorder {
   private logger: RecorderLogger
   private state: 'recording' | 'stopping' | 'stopped' = 'recording'
 
-  private actionSeq = 0
   private events: RecordedEvent[] = []
 
-  // Serialize async captures so jsonl event order matches real order
+  // Serialize async captures so event order matches real order
   private captureChain: Promise<void> = Promise.resolve()
   private pendingCaptures = 0
+  private persistTimer: ReturnType<typeof setTimeout> | null = null
 
-  private lastSnapshotByPage = new WeakMap<Page, string>()
-  private lastCookieState = new Map<string, string>()
-  // Per page: `${origin}|${kind}` → key → truncated value. sessionStorage is
-  // tab-specific so state must be keyed by page, not just origin.
-  private lastStorageByPage = new WeakMap<Page, Map<string, Map<string, string>>>()
-  private lastFocusByPage = new WeakMap<Page, string | null>()
   private lastFileInputsByPage = new WeakMap<Page, string>()
   private lastScrollByPage = new WeakMap<Page, { x: number; y: number }>()
   private lastPolledUrlByPage = new WeakMap<Page, string>()
@@ -268,9 +229,9 @@ export class ActionRecorder {
   }
 
   /** @param at epoch ms when the event was observed (defaults to now) */
-  private writeEvent(event: { type: string; [key: string]: unknown }, at?: number) {
+  private writeEvent(event: { type: string; [key: string]: unknown }, at?: number): number {
     if (this.state === 'stopped' && event.type !== 'recording-stopped') {
-      return
+      return 0
     }
     if (this.events.length >= MAX_EVENTS && event.type !== 'recording-stopped') {
       if (this.events[this.events.length - 1]?.type !== 'truncated') {
@@ -282,21 +243,46 @@ export class ActionRecorder {
         })
         this.persist()
       }
-      return
+      return 0
     }
+    const id = this.events.length + 1
     this.events.push({
-      id: this.events.length + 1,
+      id,
       ...event,
       t: this.relativeTime(at ?? Date.now()),
     })
     this.persist()
+    return id
   }
 
   private persist() {
+    if (this.persistTimer) {
+      return
+    }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null
+      this.flushPersist()
+    }, PERSIST_DEBOUNCE_MS)
+    this.persistTimer.unref?.()
+  }
+
+  private flushPersist() {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = null
+    }
+    const tmpPath = `${this.filePath}.${process.pid}.tmp`
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.events) + '\n', { mode: 0o600 })
+      fs.writeFileSync(tmpPath, JSON.stringify(this.events) + '\n', { mode: 0o600 })
+      if (process.platform === 'win32' && fs.existsSync(this.filePath)) {
+        fs.unlinkSync(this.filePath)
+      }
+      fs.renameSync(tmpPath, this.filePath)
     } catch (error) {
       this.logger.error('[record] failed to write event:', error)
+      try {
+        fs.unlinkSync(tmpPath)
+      } catch {}
     }
   }
 
@@ -342,12 +328,6 @@ export class ActionRecorder {
       }
       this.writeEvent({ type: 'page-opened', url: safePageUrl(page) })
       this.attachPageListeners(page)
-      // Baseline the new page so its first action can emit meaningful diffs
-      this.enqueueCapture(async () => {
-        await this.captureStorage(page, { emit: false })
-        await this.captureSnapshot(page, { emit: false })
-        await this.captureFileUploads(page, -1)
-      })
     }
     this.context.on('page', this.onPageHandler)
 
@@ -381,22 +361,11 @@ export class ActionRecorder {
     // Poll all pages for SPA url changes and wheel scrolling that never
     // produce recorder actions. Cheap: one evaluate per page per interval.
     this.pollTimer = setInterval(() => {
-      // Backpressure: don't stack polls when captures are already backed up
       if (this.pendingCaptures > 3) {
         return
       }
       this.enqueueCapture(() => this.pollPages())
     }, POLL_INTERVAL_MS)
-
-    // Baseline all pages so the first post-action capture emits meaningful diffs
-    this.enqueueCapture(async () => {
-      await this.captureCookies({ emit: false })
-      for (const page of this.context.pages()) {
-        await this.captureStorage(page, { emit: false })
-        await this.captureSnapshot(page, { emit: false })
-        await this.captureFileUploads(page, -1)
-      }
-    })
 
     this.writeEvent({
       type: 'recording-started',
@@ -418,6 +387,7 @@ export class ActionRecorder {
       this.pollTimer = null
     }
     this.detachListeners()
+    this.flushPersist()
     // 2. Let in-flight captures finish. New captures can't be enqueued anymore.
     await this.captureChain.catch(() => {})
     // 3. Finalize
@@ -426,6 +396,7 @@ export class ActionRecorder {
       type: 'recording-stopped',
       durationSeconds: Math.round((Date.now() - this.startedAt) / 1000),
     })
+    this.flushPersist()
     const recorderContext = this.context as unknown as RecorderCapableContext
     await recorderContext._disableRecorder().catch((error) => {
       this.logger.error('[record] failed to disable recorder:', error)
@@ -539,36 +510,48 @@ export class ActionRecorder {
     const selector = actionInContext.action.selector
       ? sanitizeLocatorText(actionInContext.action.selector)
       : undefined
+    const actionName = actionInContext.action.name
+    const clickCount = typeof actionInContext.action.clickCount === 'number' ? actionInContext.action.clickCount : undefined
+    const pointer = pointerFromAction(actionInContext.action)
     // actionUpdated = same fill, next keystroke. Edit the last action in place.
+    // Do not key by pageUrl: SPA pushState mid-fill would split one fill in two.
     if (isUpdate) {
-      const last = this.lastActionOnPage(page)
-      if (last) {
+      const last = this.lastAction()
+      if (last && typeof last.id === 'number') {
         last.code = codeText
         last.selector = selector
+        last.pageUrl = safePageUrl(page)
+        if (clickCount !== undefined) {
+          last.clickCount = clickCount
+        }
         this.persist()
         return
       }
     }
-    const actionId = ++this.actionSeq
-    this.writeEvent({
+    const actionId = this.writeEvent({
       type: 'action',
-      actionId,
-      action: actionInContext.action.name,
+      action: actionName,
       code: codeText,
       selector,
+      clickCount,
+      ...(actionName === 'click' && pointer ? pointer : {}),
       pageAlias: actionInContext.frame?.pageAlias,
       framePath: actionInContext.frame?.framePath?.length ? actionInContext.frame.framePath : undefined,
       pageUrl: safePageUrl(page),
     })
+    if (actionName === 'click') {
+      this.enqueueCapture(() => {
+        return this.captureClickScreenshot({ page, actionId, selector, pointer })
+      })
+    }
     this.enqueueCapture(() => {
-      return this.capturePostActionState(page, actionId)
+      return this.captureFileUploads(page, actionId)
     })
   }
 
-  private lastActionOnPage(page: Page): RecordedEvent | undefined {
-    const pageUrl = safePageUrl(page)
-    return [...this.events].reverse().find((event) => {
-      return event.type === 'action' && event.pageUrl === pageUrl
+  private lastAction(): RecordedEvent | undefined {
+    return this.events.findLast((event) => {
+      return event.type === 'action'
     })
   }
 
@@ -600,19 +583,6 @@ export class ActionRecorder {
     })
   }
 
-  private async capturePostActionState(page: Page, actionId: number) {
-    if (page.isClosed()) {
-      return
-    }
-    // Give the page a moment to settle after the action (network, rerenders)
-    await new Promise((r) => setTimeout(r, 300))
-    await this.captureSnapshot(page, { emit: true, afterActionId: actionId })
-    await this.captureFocus(page, actionId)
-    await this.captureCookies({ emit: true, afterActionId: actionId })
-    await this.captureStorage(page, { emit: true, afterActionId: actionId })
-    await this.captureFileUploads(page, actionId)
-  }
-
   // File inputs can't be recorded as recorder actions (the OS file chooser is
   // native), so detect chosen files by diffing input[type=file] states after
   // each action. Only file names are visible to page JS, never full paths.
@@ -640,7 +610,7 @@ export class ActionRecorder {
     const currentJson = JSON.stringify(inputs)
     const previous = this.lastFileInputsByPage.get(page)
     this.lastFileInputsByPage.set(page, currentJson)
-    if (previous === undefined || previous === currentJson) {
+    if (previous === currentJson) {
       return
     }
     const withFiles = inputs.filter((input) => input.files.length > 0)
@@ -650,152 +620,87 @@ export class ActionRecorder {
     this.writeEvent({ type: 'file-upload', afterActionId, inputs: withFiles, pageUrl: safePageUrl(page) })
   }
 
-  private async captureSnapshot(page: Page, { emit, afterActionId }: { emit: boolean; afterActionId?: number }) {
+  private async captureClickScreenshot({
+    page,
+    actionId,
+    selector,
+    pointer,
+  }: {
+    page: Page
+    actionId: number
+    selector: string | undefined
+    pointer: PointerPoint | undefined
+  }) {
     if (page.isClosed()) {
       return
     }
-    const { snapshot } = await getAriaSnapshot({ page, interactiveOnly: true })
-    const previous = this.lastSnapshotByPage.get(page)
-    this.lastSnapshotByPage.set(page, snapshot)
-    if (!emit || previous === undefined) {
-      return
+    const box = selector
+      ? await page
+          .locator(selector)
+          .first()
+          .boundingBox()
+          .catch(() => {
+            return null
+          })
+      : null
+    const rect = box
+      ? { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) }
+      : pointer
+        ? { x: pointer.clientX - 12, y: pointer.clientY - 12, width: 24, height: 24 }
+        : null
+    const dir = path.join(os.tmpdir(), 'playwriter-recorder', this.recordingId)
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const screenshotPath = path.join(dir, `${actionId}.png`)
+    try {
+      if (rect) {
+        await page
+          .evaluate((highlight) => {
+            const existing = document.getElementById('__playwriter_click_rect__')
+            existing?.remove()
+            const el = document.createElement('div')
+            el.id = '__playwriter_click_rect__'
+            el.style.cssText = [
+              'position:fixed',
+              `left:${highlight.x}px`,
+              `top:${highlight.y}px`,
+              `width:${highlight.width}px`,
+              `height:${highlight.height}px`,
+              'border:3px solid #ff2d55',
+              'box-shadow:0 0 0 2px #fff',
+              'pointer-events:none',
+              'z-index:2147483647',
+            ].join(';')
+            document.documentElement.appendChild(el)
+          }, rect)
+          .catch(() => {})
+      }
+      await Promise.race([
+        page.screenshot({ path: screenshotPath, scale: 'css' }),
+        new Promise<void>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('click screenshot timed out'))
+          }, 8000).unref?.()
+        }),
+      ])
+    } catch (error) {
+      this.logger.error('[record] click screenshot failed:', error)
+    } finally {
+      await page.evaluate(() => {
+        document.getElementById('__playwriter_click_rect__')?.remove()
+      }).catch(() => {})
     }
-    const diff = createSmartDiff({ oldContent: previous, newContent: snapshot, label: 'snapshot' })
-    if (diff.type === 'no-change') {
+    if (!fs.existsSync(screenshotPath)) {
       return
     }
     this.writeEvent({
-      type: 'snapshot-diff',
-      afterActionId,
-      format: diff.type,
+      type: 'screenshot',
+      afterActionId: actionId,
+      path: screenshotPath,
+      x: pointer?.x,
+      y: pointer?.y,
+      ...(rect || {}),
       pageUrl: safePageUrl(page),
-      content: truncate(diff.content, MAX_SNAPSHOT_DIFF_CHARS),
     })
-  }
-
-  private async captureFocus(page: Page, afterActionId: number) {
-    if (page.isClosed()) {
-      return
-    }
-    const descriptor = await page
-      .evaluate((): FocusDescriptor | null => {
-        const el = document.activeElement
-        if (!el || el === document.body) {
-          return null
-        }
-        const text = (el.textContent || '').trim().slice(0, 40)
-        return {
-          tag: el.tagName.toLowerCase(),
-          id: el.id || undefined,
-          role: el.getAttribute('role') || undefined,
-          name: el.getAttribute('name') || undefined,
-          placeholder: el.getAttribute('placeholder') || undefined,
-          ariaLabel: el.getAttribute('aria-label') || undefined,
-          text: text || undefined,
-        }
-      })
-      .catch(() => null)
-    const focusJson = descriptor ? JSON.stringify(descriptor) : null
-    if (focusJson === this.lastFocusByPage.get(page)) {
-      return
-    }
-    this.lastFocusByPage.set(page, focusJson)
-    this.writeEvent({ type: 'focus', afterActionId, element: descriptor, pageUrl: safePageUrl(page) })
-  }
-
-  private async captureCookies({ emit, afterActionId }: { emit: boolean; afterActionId?: number }) {
-    const cookies = await listCookies({ context: this.context, pages: this.context.pages() })
-    const current = new Map<string, string>()
-    for (const cookie of cookies) {
-      // Value fingerprint (hash, not the value itself) so token rotation shows
-      // up as "changed" without dumping secrets into the events file
-      current.set(`${cookie.name}|${cookie.domain}|${cookie.path}`, fingerprint(cookie.value))
-    }
-    const previous = this.lastCookieState
-    this.lastCookieState = current
-    if (!emit) {
-      return
-    }
-    const added: string[] = []
-    const changed: string[] = []
-    const removed: string[] = []
-    for (const [key, value] of current) {
-      const prev = previous.get(key)
-      if (prev === undefined) {
-        added.push(key)
-      } else if (prev !== value) {
-        changed.push(key)
-      }
-    }
-    for (const key of previous.keys()) {
-      if (!current.has(key)) {
-        removed.push(key)
-      }
-    }
-    if (added.length === 0 && changed.length === 0 && removed.length === 0) {
-      return
-    }
-    this.writeEvent({ type: 'cookies', afterActionId, added, changed, removed })
-  }
-
-  private async captureStorage(page: Page, { emit, afterActionId }: { emit: boolean; afterActionId?: number }) {
-    if (page.isClosed()) {
-      return
-    }
-    const state = await page
-      .evaluate(() => {
-        const dump = (storage: Storage) => {
-          const entries: Record<string, string> = {}
-          for (let i = 0; i < storage.length; i++) {
-            const key = storage.key(i)
-            if (key !== null) {
-              entries[key] = String(storage.getItem(key) ?? '')
-            }
-          }
-          return entries
-        }
-        return { origin: window.location.origin, localStorage: dump(localStorage), sessionStorage: dump(sessionStorage) }
-      })
-      .catch(() => null)
-    if (!state) {
-      return
-    }
-    let pageStorage = this.lastStorageByPage.get(page)
-    if (!pageStorage) {
-      pageStorage = new Map()
-      this.lastStorageByPage.set(page, pageStorage)
-    }
-    for (const kind of ['localStorage', 'sessionStorage'] as const) {
-      const stateKey = `${state.origin}|${kind}`
-      const current = new Map<string, string>(
-        Object.entries(state[kind]).map(([key, value]) => [key, truncate(value, MAX_VALUE_CHARS)]),
-      )
-      const previous = pageStorage.get(stateKey)
-      pageStorage.set(stateKey, current)
-      if (!emit || !previous) {
-        continue
-      }
-      const added: Record<string, string> = {}
-      const changed: Record<string, string> = {}
-      const removed: string[] = []
-      for (const [key, value] of current) {
-        const prev = previous.get(key)
-        if (prev === undefined) {
-          added[key] = value
-        } else if (prev !== value) {
-          changed[key] = value
-        }
-      }
-      for (const key of previous.keys()) {
-        if (!current.has(key)) {
-          removed.push(key)
-        }
-      }
-      if (Object.keys(added).length === 0 && Object.keys(changed).length === 0 && removed.length === 0) {
-        continue
-      }
-      this.writeEvent({ type: 'storage', afterActionId, kind, origin: state.origin, added, changed, removed })
-    }
   }
 
   private recordNetworkRequest(request: Request, failure: string | null) {
@@ -804,6 +709,9 @@ export class ActionRecorder {
     }
     const resourceType = request.resourceType()
     if (!TRACKED_RESOURCE_TYPES.has(resourceType)) {
+      return
+    }
+    if (!MUTATING_METHODS.has(request.method().toUpperCase())) {
       return
     }
     const url = request.url()
@@ -882,33 +790,18 @@ function safePageUrl(page: Page): string {
   }
 }
 
-type CookieIdentity = { name: string; domain: string; path: string; value: string }
-
-// Extension mode rejects context.cookies() (Storage.getCookies has no browser
-// session). Fall back to Network.getCookies on each page's existing CDP session.
-async function listCookies({ context, pages }: { context: BrowserContext; pages: Page[] }): Promise<CookieIdentity[]> {
-  try {
-    return await context.cookies()
-  } catch {}
-  const byKey = new Map<string, CookieIdentity>()
-  for (const page of pages) {
-    if (page.isClosed()) {
-      continue
-    }
-    const session = await getCDPSessionForPage({ page }).catch(() => {
-      return null
-    })
-    if (!session) {
-      continue
-    }
-    const result = await session.send('Network.getCookies').catch(() => {
-      return null
-    })
-    for (const cookie of result?.cookies || []) {
-      byKey.set(`${cookie.name}|${cookie.domain}|${cookie.path}`, cookie)
-    }
+function pointerFromAction(action: ActionInContext['action']): PointerPoint | undefined {
+  if (typeof action.x !== 'number' || typeof action.y !== 'number') {
+    return undefined
   }
-  return [...byKey.values()]
+  return {
+    x: action.x,
+    y: action.y,
+    clientX: typeof action.clientX === 'number' ? action.clientX : action.x,
+    clientY: typeof action.clientY === 'number' ? action.clientY : action.y,
+    scrollX: typeof action.scrollX === 'number' ? action.scrollX : 0,
+    scrollY: typeof action.scrollY === 'number' ? action.scrollY : 0,
+  }
 }
 
 // Icon fonts put private-use glyphs in accessible names (` Login`). Strip them

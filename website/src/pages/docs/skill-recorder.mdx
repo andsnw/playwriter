@@ -17,8 +17,8 @@ writes a **skill**: a SKILL.md plus a utils script that automates the same flow 
 <Steps>
   <Step title='Say "start recording"'>
     Your agent runs `playwriter recorder start`. From this moment every click, fill,
-    navigation, network request, cookie/storage change, and snapshot diff is captured
-    to a JSON event file.
+    navigation, and mutating xhr/fetch is captured to a JSON event file. Clicks also
+    store x/y and a highlighted screenshot.
   </Step>
   <Step title='Perform the workflow in your browser'>
     Use the app like you normally would, in your real Chrome with your real logins.
@@ -40,9 +40,9 @@ writes a **skill**: a SKILL.md plus a utils script that automates the same flow 
   including the parts you'd forget to mention ("click the second row, the first is a header").
 - **Real locators, not guesses.** Every action is recorded with the same locator code
   Playwright's own codegen produces: `await page.getByRole('button', { name: 'Submit' }).click()`.
-- **The agent sees what changed, not just what you clicked.** Each action is linked to
-  the aria snapshot diff, network requests, and cookie/storage changes it caused, so the
-  generated skill knows the **expected outcome** of every step.
+- **The agent sees where you clicked.** Each click stores page x/y and a screenshot
+  with a rectangle on the target, plus mutating xhr/fetch, so the generated skill
+  knows the **expected outcome** of every step.
 - **Your logins come free.** Recording happens in your real Chrome with your real
   sessions. No credential handling, no bot walls from a fresh automation browser.
 
@@ -67,7 +67,7 @@ playwriter recorder stop
 ```
 
 The agent inspects the events. The default view is a **thin timeline**: heavy payloads
-(response bodies, snapshot diffs) show up as sizes, so reading the whole recording costs
+(response bodies) show up as sizes, so reading the whole recording costs
 few tokens:
 
 ```bash
@@ -81,8 +81,8 @@ playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // empty)] |
 4   3.8   action              await page.getByRole('textbox', { name: 'Product name' }).fill('Acme')
 5   5.2   action              await page.getByRole('textbox', { name: 'Website URL' }).fill('https://acme.com')
 6   7.0   action              await page.getByRole('button', { name: 'Submit' }).click()
-7   7.3   network             POST 200 https://directory.example.com/api/products
-8   7.6   snapshot-diff       + text: "Thanks! Your product is under review."
+7   7.1   screenshot          /tmp/playwriter-recorder/1/6.png
+8   7.3   network             POST 200 https://directory.example.com/api/products
 ```
 
 Then it drills into the events that matter, by id:
@@ -97,20 +97,17 @@ Every event is one JSON line with a timestamp (`t`, seconds since start):
 
 | Event type                    | What it captures                                                                                                                                                          |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `action`                      | Click, fill, press, select — with generated Playwright locator code and an `actionId`                                                                                     |
-| `snapshot-diff`               | How the page's aria snapshot changed after each action                                                                                                                    |
-| `network`                     | Document/XHR/fetch requests: method, url, status, post data, and **response bodies** for JSON/text responses (shown as sizes in the thin view, full content per event id) |
+| `action`                      | Click, fill, press, select — with generated Playwright locator code, and `x`/`y` on clicks                                                                                |
+| `screenshot`                  | Viewport PNG after a click, with a rectangle on the clicked box. `path` + `afterActionId`                                                                                 |
+| `network`                     | POST/PUT/PATCH/DELETE xhr/fetch only: method, url, status, post data, and **response bodies** for JSON/text                                                               |
 | `download`                    | File downloads: source url and suggested filename                                                                                                                         |
 | `file-upload`                 | Files chosen in `input[type=file]` elements (file names)                                                                                                                  |
-| `cookies` / `storage`         | Cookie and localStorage/sessionStorage changes (values hashed or truncated)                                                                                               |
 | `navigation` / `url-changed`  | Full navigations and SPA pushState url changes                                                                                                                            |
 | `page-opened` / `page-closed` | Popups and new tabs, with page aliases                                                                                                                                    |
 | `console` / `page-error`      | Console errors/warnings and uncaught page errors                                                                                                                          |
-| `focus` / `scroll` / `signal` | Focus changes, scrolling, navigation signals                                                                                                                              |
+| `scroll` / `signal`           | Window scroll and navigation signals                                                                                                                                      |
 
-State-change events carry `afterActionId`, linking each UI/network/storage change to the
-action that caused it. That's what lets the agent write skills with **verifiable expected
-outcomes** for every step:
+Screenshot events carry `afterActionId`, linking the image to the click that caused it:
 
 ```bash
 # everything action 3 caused
@@ -123,9 +120,9 @@ The `recorder start` output includes full instructions for the agent: ask you to
 what you did, inspect the events, verify each locator against the live page, ask for the
 skill name and which values should become parameters, then write two files:
 
-**`SKILL.md`** — the high-level flow: preconditions (login state from the recorded cookie
-events), numbered steps with locators, the expected outcome of each step (url change,
-snapshot text, network request), and how to detect success.
+**`SKILL.md`** — the high-level flow: preconditions (already signed-in browser),
+numbered steps with locators, the expected outcome of each step (url change,
+confirmation text, mutating network request), and how to detect success.
 
 **`utils.js`** — importable functions that replay the flow with few tokens:
 

@@ -261,7 +261,7 @@ The file is read from disk and executed in the same sandbox as `-e`. All context
 
 ### Recording user actions for skill generation
 
-`playwriter recorder start` records everything the user does in the browser (clicks, typing, navigations, network requests, cookie/storage changes, aria snapshot diffs) as events with generated locator strings. When the user asks you to "start recording", run it, wait for them to perform their workflow, then run `playwriter recorder stop` when they say done and `playwriter recorder events` to read the events. The `recorder start` output prints full instructions for turning a recording into a reusable skill (SKILL.md + utils script). Recording runs inside the relay daemon, so it survives CLI exits.
+`playwriter recorder start` records everything the user does in the browser (clicks with x/y and a highlighted screenshot, typing, navigations, mutating xhr/fetch) as events with generated locator strings. When the user asks you to "start recording", run it, wait for them to perform their workflow, then run `playwriter recorder stop` when they say done and `playwriter recorder events` to read the events. The `recorder start` output prints full instructions for turning a recording into a reusable skill (SKILL.md + utils script). Recording runs inside the relay daemon, so it survives CLI exits.
 
 ### Live streaming to RTMP (X Live, Twitch, YouTube)
 
