@@ -14,29 +14,29 @@ Playwriter's relay server runs on the host machine alongside Chrome. A [traforo]
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │  HOST MACHINE (has Chrome)                                                             │
 │                                                                                        │
-│  Chrome + Extension ◄────── local WS ──────► Relay Server :19988                       │
-│                                                    ▲                                   │
+│  Chrome + Extension <────── local WS ──────> Relay Server :19988                       │
+│                                                    ^                                   │
 │                                                    │ local                             │
-│                                                    ▼                                   │
+│                                                    v                                   │
 │                                               Traforo Client                           │
 │                                                    │                                   │
 └────────────────────────────────────────────────────┼───────────────────────────────────┘
                                                      │ outbound WS
-                                                     ▼
+                                                     v
                                             ┌─────────────────┐
-                                            │   Cloudflare     │
-                                            │   Durable Object │
-                                            │                  │
-                                            │   https://{id}-  │
-                                            │   tunnel.        │
-                                            │   traforo.dev    │
+                                            │   Cloudflare    │
+                                            │   Durable Object│
+                                            │                 │
+                                            │   https://{id}- │
+                                            │   tunnel.       │
+                                            │   traforo.dev   │
                                             └────────┬────────┘
                                                      │
-                                                     ▼
+                                                     v
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │  REMOTE MACHINE (CLI or MCP)                                                           │
 │                                                                                        │
-│  playwriter -s 1 -e "await page.goto('https://...')"                                  │
+│  playwriter -s 1 -e "await page.goto('https://...')"                                   │
 │                                                                                        │
 │  PLAYWRITER_HOST=https://{id}-tunnel.traforo.dev                                       │
 │  PLAYWRITER_TOKEN=&lt;secret&gt;                                                       │
@@ -156,8 +156,8 @@ From Docker, set `PLAYWRITER_HOST` and `PLAYWRITER_TOKEN` to reach the host rela
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │  HOST MACHINE                                                                          │
 │                                                                                        │
-│  Chrome + Extension ◄────── local WS ──────► playwriter serve :19988                   │
-└────────────────────────────────────────────────────────▲───────────────────────────────┘
+│  Chrome + Extension <────── local WS ──────> playwriter serve :19988                   │
+└────────────────────────────────────────────────────────^───────────────────────────────┘
                                                          │
                                             host.docker.internal:19988
                                                          │
@@ -196,11 +196,11 @@ playwriter -s 1 -e "await page.goto('https://example.com')"
 
 ### Platform support for `host.docker.internal`
 
-| Platform                       | Works out of the box? | Notes                                              |
-| ------------------------------ | --------------------- | -------------------------------------------------- |
-| **macOS** (Docker Desktop)     | Yes                   | Supported since Docker Desktop 18.03               |
-| **Windows** (Docker Desktop)   | Yes                   | Supported since Docker Desktop 18.03               |
-| **Linux** (Docker Engine)      | No                    | Requires `--add-host` or `extra_hosts` (see below) |
+| Platform                     | Works out of the box? | Notes                                              |
+| ---------------------------- | --------------------- | -------------------------------------------------- |
+| **macOS** (Docker Desktop)   | Yes                   | Supported since Docker Desktop 18.03               |
+| **Windows** (Docker Desktop) | Yes                   | Supported since Docker Desktop 18.03               |
+| **Linux** (Docker Engine)    | No                    | Requires `--add-host` or `extra_hosts` (see below) |
 
 On Linux, `host.docker.internal` is **not provided automatically** by Docker Engine. You must add it explicitly:
 
@@ -274,7 +274,7 @@ On Linux, make sure the container has `--add-host=host.docker.internal:host-gate
 | ------------------ | ---------------------------------------------------------------------------------- |
 | `PLAYWRITER_HOST`  | Remote relay URL (e.g. `https://x-tunnel.traforo.dev`) or IP (e.g. `192.168.1.10`) |
 | `PLAYWRITER_TOKEN` | Authentication token for the relay server                                          |
-| `PLAYWRITER_PORT`  | Override relay port (default: `19988`, not needed with traforo)                     |
+| `PLAYWRITER_PORT`  | Override relay port (default: `19988`, not needed with traforo)                    |
 
 ### Recommendations
 

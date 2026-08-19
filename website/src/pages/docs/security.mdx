@@ -14,8 +14,8 @@ Everything runs **on your machine**. The relay binds to `localhost:19988` and on
 │                                YOUR MACHINE                                              │
 │                                                                                          │
 │  ┌─────────────┐          ┌──────────────────┐          ┌──────────────┐                 │
-│  │  Extension   │◄────────►  Relay Server     │◄────────►  CLI / MCP   │                 │
-│  │  (Chrome)    │   WS     │  localhost:19988  │   WS     │  (Agent)    │                 │
+│  │  Extension  │ <────────>  Relay Server     │<────────>  CLI / MCP   │                 │
+│  │  (Chrome)   │    WS     │  localhost:19988  │   WS     │  (Agent)    │                │
 │  └─────────────┘          └──────────────────┘          └──────────────┘                 │
 │                                                                                          │
 │  Nothing leaves localhost unless you explicitly set up remote access                     │
@@ -36,10 +36,10 @@ Everything runs **on your machine**. The relay binds to `localhost:19988` and on
 
 The `require('node:fs')` module in the execution sandbox is **scoped**. Write operations only succeed in:
 
-| Allowed path | Description |
-|---|---|
-| Session cwd | The directory where `playwriter` CLI was invoked |
-| `/tmp` | System temp directory |
+| Allowed path  | Description                                            |
+| ------------- | ------------------------------------------------------ |
+| Session cwd   | The directory where `playwriter` CLI was invoked       |
+| `/tmp`        | System temp directory                                  |
 | `os.tmpdir()` | OS-specific temp (e.g. `/var/folders/.../T/` on macOS) |
 
 Writing to any other path throws `EPERM: operation not permitted, access outside allowed directories`. To save files elsewhere, write to a temp path first, then move the file using a shell command outside the sandbox.
