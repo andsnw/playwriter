@@ -2036,6 +2036,13 @@ cli
     }
   })
 
+cli
+  .command('serve restart', 'Kill and restart the local relay daemon')
+  .hidden()
+  .action(async () => {
+    await ensureRelayServer({ logger: console, forceRestart: true })
+  })
+
 cli.command('logfile', 'Print the path to the relay server log file').action(() => {
   console.log(`relay: ${LOG_FILE_PATH}`)
   console.log(`cdp: ${LOG_CDP_FILE_PATH}`)

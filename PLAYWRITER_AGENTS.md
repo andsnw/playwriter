@@ -69,10 +69,10 @@ to test CLI changes without publishing:
 
 ### reloading extension during development
 
-after making changes to extension code:
+after making changes to extension or playwriter code:
 
 ```bash
-pnpm --filter mcp-extension reload  # builds and opens chrome://extensions page
+pnpm reload  # builds playwriter, restarts the relay daemon, builds and opens chrome://extensions
 ```
 
 then click the reload button on the extension card in Chrome. the extension has a stable dev ID (`pebbngnfojnignonigcnkdilknapkgid`) so you don't need to reconfigure anything.
