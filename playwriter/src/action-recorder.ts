@@ -116,6 +116,9 @@ const TRACKED_RESOURCE_TYPES = new Set(['xhr', 'fetch'])
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const PERSIST_DEBOUNCE_MS = 50
 const MAX_EVENTS = 10000
+export const DEFAULT_RECORDING_MAX_DURATION_MS = 20 * 60 * 1000
+export const DEFAULT_RECORDER_ENABLE_TIMEOUT_MS = 15_000
+export const DEFAULT_RECORDER_DISABLE_TIMEOUT_MS = 2_000
 const MAX_RESPONSE_BODY_CHARS = 50000
 const MAX_POST_DATA_CHARS = 10000
 const MAX_CONSOLE_TEXT_CHARS = 2000
@@ -156,11 +159,18 @@ interface PageHandlers {
   pageerror: (error: Error) => void
 }
 
+export type RecordingStopReason = 'user' | 'max-duration' | 'context-closed' | 'start-failed'
+
 export interface ActionRecorderOptions {
   context: BrowserContext
   sessionId: string
   recordingId: string
   logger: RecorderLogger
+  maxDurationMs?: number
+  enableTimeoutMs?: number
+  disableTimeoutMs?: number
+  /** Test seam: resolve after enable, before the recording is marked ready. */
+  holdAfterEnable?: () => Promise<void>
 }
 
 export class ActionRecorder {
@@ -173,7 +183,13 @@ export class ActionRecorder {
 
   private context: BrowserContext
   private logger: RecorderLogger
-  private state: 'recording' | 'stopping' | 'stopped' = 'recording'
+  private state: 'starting' | 'recording' | 'stopping' | 'stopped' = 'starting'
+  private maxDurationMs: number
+  private enableTimeoutMs: number
+  private disableTimeoutMs: number
+  private holdAfterEnable: (() => Promise<void>) | null
+  private maxDurationTimer: ReturnType<typeof setTimeout> | null = null
+  private abortStart: ((error: Error) => void) | null = null
 
   private events: RecordedEvent[] = []
 
@@ -196,6 +212,10 @@ export class ActionRecorder {
     this.recordingId = options.recordingId
     this.logger = options.logger
     this.filePath = recordingFilePath(options.recordingId)
+    this.maxDurationMs = options.maxDurationMs ?? DEFAULT_RECORDING_MAX_DURATION_MS
+    this.enableTimeoutMs = options.enableTimeoutMs ?? DEFAULT_RECORDER_ENABLE_TIMEOUT_MS
+    this.disableTimeoutMs = options.disableTimeoutMs ?? DEFAULT_RECORDER_DISABLE_TIMEOUT_MS
+    this.holdAfterEnable = options.holdAfterEnable ?? null
   }
 
   get eventCount() {
@@ -212,6 +232,7 @@ export class ActionRecorder {
         this.events.push({
           id: this.events.length + 1,
           t: this.relativeTime(Date.now()),
+          ms: this.elapsedMs(Date.now()),
           type: 'truncated',
           maxEvents: MAX_EVENTS,
         })
@@ -220,10 +241,12 @@ export class ActionRecorder {
       return 0
     }
     const id = this.events.length + 1
+    const atMs = at ?? Date.now()
     this.events.push({
       id,
       ...event,
-      t: this.relativeTime(at ?? Date.now()),
+      t: this.relativeTime(atMs),
+      ms: this.elapsedMs(atMs),
     })
     this.persist()
     return id
@@ -264,6 +287,10 @@ export class ActionRecorder {
     return Math.round((at - this.startedAt) / 100) / 10
   }
 
+  private elapsedMs(at: number): number {
+    return Math.max(0, Math.round(at - this.startedAt))
+  }
+
   async start() {
     fs.mkdirSync(getRecordingsDir(), { recursive: true, mode: 0o700 })
     // 'wx' fails with EEXIST instead of truncating: another relay process
@@ -271,8 +298,109 @@ export class ActionRecorder {
     // shared recordings dir. The manager retries with the next id on EEXIST.
     fs.writeFileSync(this.filePath, '[]\n', { mode: 0o600, flag: 'wx' })
 
+    try {
+      await this.enableRecorder()
+    } catch (error) {
+      await this.failStart()
+      throw error
+    }
+    if (this.state !== 'starting') {
+      throw new RecordingError('Recording was stopped before it finished starting', 409)
+    }
+
+    this.onPageHandler = (page: Page) => {
+      if (this.state !== 'recording') {
+        return
+      }
+      this.writeEvent({ type: 'page-opened', url: safePageUrl(page) })
+      this.attachPageListeners(page)
+    }
+    this.context.on('page', this.onPageHandler)
+
+    // Auto-stop when the context closes (extension toggled off, session reset,
+    // browser gone). Without this the manager would report a dead recording as
+    // active forever and the poll timer would leak.
+    this.onContextCloseHandler = () => {
+      if (this.state !== 'recording') {
+        return
+      }
+      this.writeEvent({ type: 'context-closed' })
+      this.stop({ reason: 'context-closed' }).catch((error) => {
+        this.logger.error('[record] auto-stop on context close failed:', error)
+      })
+    }
+    this.context.on('close', this.onContextCloseHandler)
+
+    this.onRequestFinishedHandler = (request: Request) => {
+      this.recordNetworkRequest(request, null)
+    }
+    this.onRequestFailedHandler = (request: Request) => {
+      this.recordNetworkRequest(request, request.failure()?.errorText || 'failed')
+    }
+    this.context.on('requestfinished', this.onRequestFinishedHandler)
+    this.context.on('requestfailed', this.onRequestFailedHandler)
+
+    for (const page of this.context.pages()) {
+      this.attachPageListeners(page)
+    }
+    this.framesDir = path.join(getRecordingsDir(), this.recordingId, 'frames')
+    fs.mkdirSync(this.framesDir, { recursive: true, mode: 0o700 })
+    this.writeEvent({
+      type: 'recording-started',
+      startedAt: new Date(this.startedAt).toISOString(),
+      sessionId: this.sessionId,
+      recordingId: this.recordingId,
+      framesDir: this.framesDir,
+      urls: this.context.pages().map((p) => safePageUrl(p)),
+    })
+    await Promise.all(this.context.pages().map((page) => this.startPageScreencast(page)))
+    if (this.holdAfterEnable) {
+      await this.holdAfterEnable()
+    }
+    if (this.state !== 'starting') {
+      throw new RecordingError('Recording was stopped before it finished starting', 409)
+    }
+    this.state = 'recording'
+    this.scheduleMaxDurationStop()
+  }
+
+  async stop(options?: { reason?: RecordingStopReason }): Promise<{ eventCount: number; filePath: string }> {
+    if (this.state === 'stopped' || this.state === 'stopping') {
+      return { eventCount: this.eventCount, filePath: this.filePath }
+    }
+    const reason = options?.reason ?? 'user'
+    if (this.state === 'starting') {
+      this.abortStart?.(new RecordingError('Recording was stopped before it finished starting', 409))
+    }
+    this.clearMaxDurationTimer()
+    // 1. Stop accepting new input: sink handlers and listeners check state
+    this.state = 'stopping'
+    this.detachListeners()
+    this.flushPersist()
+    // 2. Let in-flight captures finish. New captures can't be enqueued anymore.
+    await this.captureChain.catch(() => {})
+    await this.stopAllScreencasts()
+    // 3. Finalize
+    this.writeEvent({
+      type: 'recording-stopped',
+      reason,
+      durationSeconds: Math.round((Date.now() - this.startedAt) / 1000),
+      framesDir: this.framesDir,
+      frameCount: this.frameCount,
+    })
+    this.flushPersist()
+    await this.disableRecorder()
+    this.state = 'stopped'
+    this.onDidStop?.()
+    this.onDidStop = null
+    return { eventCount: this.eventCount, filePath: this.filePath }
+  }
+
+  // _enableRecorder can hang forever if a frame never gets a main world
+  // (empty target, OOPIF). Race start against a timeout and against stop().
+  private async enableRecorder() {
     const recorderContext = this.context as unknown as RecorderCapableContext
-    await recorderContext._enableRecorder(
+    const enable = recorderContext._enableRecorder(
       { language: 'javascript', mode: 'recording', recorderMode: 'api' },
       {
         actionAdded: (page, actionInContext, code) => {
@@ -295,84 +423,112 @@ export class ActionRecorder {
         },
       },
     )
-
-    this.onPageHandler = (page: Page) => {
-      if (this.state !== 'recording') {
-        return
-      }
-      this.writeEvent({ type: 'page-opened', url: safePageUrl(page) })
-      this.attachPageListeners(page)
-    }
-    this.context.on('page', this.onPageHandler)
-
-    // Auto-stop when the context closes (extension toggled off, session reset,
-    // browser gone). Without this the manager would report a dead recording as
-    // active forever and the poll timer would leak.
-    this.onContextCloseHandler = () => {
-      if (this.state !== 'recording') {
-        return
-      }
-      this.writeEvent({ type: 'context-closed' })
-      this.stop().catch((error) => {
-        this.logger.error('[record] auto-stop on context close failed:', error)
-      })
-    }
-    this.context.on('close', this.onContextCloseHandler)
-
-    this.onRequestFinishedHandler = (request: Request) => {
-      this.recordNetworkRequest(request, null)
-    }
-    this.onRequestFailedHandler = (request: Request) => {
-      this.recordNetworkRequest(request, request.failure()?.errorText || 'failed')
-    }
-    this.context.on('requestfinished', this.onRequestFinishedHandler)
-    this.context.on('requestfailed', this.onRequestFailedHandler)
-
-    for (const page of this.context.pages()) {
-      this.attachPageListeners(page)
-    }
-    await this.context.addInitScript(installClickRipple).catch(() => {})
-
-    this.framesDir = path.join(getRecordingsDir(), this.recordingId, 'frames')
-    fs.mkdirSync(this.framesDir, { recursive: true, mode: 0o700 })
-    this.writeEvent({
-      type: 'recording-started',
-      startedAt: new Date(this.startedAt).toISOString(),
-      sessionId: this.sessionId,
-      recordingId: this.recordingId,
-      framesDir: this.framesDir,
-      urls: this.context.pages().map((p) => safePageUrl(p)),
-    })
-    await Promise.all(this.context.pages().map((page) => this.startPageScreencast(page)))
+    enable.then(
+      () => {
+        if (this.state === 'stopped' || this.state === 'stopping') {
+          void this.disableRecorder()
+        }
+      },
+      () => {},
+    )
+    await this.raceStart(enable)
   }
 
-  async stop(): Promise<{ eventCount: number; filePath: string }> {
-    if (this.state !== 'recording') {
-      return { eventCount: this.eventCount, filePath: this.filePath }
-    }
-    // 1. Stop accepting new input: sink handlers and listeners check state
-    this.state = 'stopping'
-    this.detachListeners()
-    this.flushPersist()
-    // 2. Let in-flight captures finish. New captures can't be enqueued anymore.
-    await this.captureChain.catch(() => {})
-    await this.stopAllScreencasts()
-    // 3. Finalize
-    this.state = 'stopped'
-    this.writeEvent({
-      type: 'recording-stopped',
-      durationSeconds: Math.round((Date.now() - this.startedAt) / 1000),
-      framesDir: this.framesDir,
-      frameCount: this.frameCount,
+  private raceStart(enable: Promise<void>): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (fn: () => void) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        this.abortStart = null
+        if (timer) {
+          clearTimeout(timer)
+        }
+        fn()
+      }
+      this.abortStart = (error) => {
+        finish(() => {
+          reject(error)
+        })
+      }
+      const timer =
+        this.enableTimeoutMs > 0
+          ? setTimeout(() => {
+              finish(() => {
+                reject(
+                  new RecordingError(
+                    `Recorder failed to start within ${this.enableTimeoutMs}ms. A tab frame may be stuck without a document.`,
+                    500,
+                  ),
+                )
+              })
+            }, this.enableTimeoutMs)
+          : null
+      timer?.unref?.()
+      enable.then(
+        () => {
+          finish(() => {
+            resolve()
+          })
+        },
+        (error) => {
+          finish(() => {
+            reject(error)
+          })
+        },
+      )
     })
-    this.flushPersist()
+  }
+
+  private async failStart() {
+    if (this.state === 'stopped' || this.state === 'stopping') {
+      return
+    }
+    await this.stop({ reason: 'start-failed' }).catch((stopError) => {
+      this.logger.error('[record] cleanup after failed start:', stopError)
+    })
+  }
+
+  private async disableRecorder() {
     const recorderContext = this.context as unknown as RecorderCapableContext
-    await recorderContext._disableRecorder().catch((error) => {
+    const disable = recorderContext._disableRecorder().catch((error) => {
       this.logger.error('[record] failed to disable recorder:', error)
     })
-    this.onDidStop?.()
-    this.onDidStop = null
-    return { eventCount: this.eventCount, filePath: this.filePath }
+    if (this.disableTimeoutMs <= 0) {
+      await disable
+      return
+    }
+    await Promise.race([
+      disable,
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, this.disableTimeoutMs)
+        timer.unref?.()
+      }),
+    ])
+  }
+
+  private scheduleMaxDurationStop() {
+    this.clearMaxDurationTimer()
+    if (!(this.maxDurationMs > 0) || this.maxDurationMs === Infinity) {
+      return
+    }
+    this.maxDurationTimer = setTimeout(() => {
+      this.maxDurationTimer = null
+      this.stop({ reason: 'max-duration' }).catch((error) => {
+        this.logger.error('[record] auto-stop on max duration failed:', error)
+      })
+    }, this.maxDurationMs)
+    this.maxDurationTimer.unref?.()
+  }
+
+  private clearMaxDurationTimer() {
+    if (!this.maxDurationTimer) {
+      return
+    }
+    clearTimeout(this.maxDurationTimer)
+    this.maxDurationTimer = null
   }
 
   private detachListeners() {
@@ -412,6 +568,9 @@ export class ActionRecorder {
           return
         }
         this.writeEvent({ type: 'navigation', url: frame.url() })
+        // Same as the toolbar: MAIN-world script dies on hard navigation.
+        // Re-inject once the new document exists.
+        page.evaluate(installClickRipple).catch(() => {})
       },
       close: () => {
         if (this.state !== 'recording') {
@@ -516,22 +675,35 @@ export class ActionRecorder {
     })
   }
 
+  private isInactive() {
+    return this.state === 'stopped' || this.state === 'stopping'
+  }
+
   private async startPageScreencast(page: Page) {
-    if (this.screencasts.has(page) || page.isClosed() || !this.framesDir) {
+    if (this.screencasts.has(page) || page.isClosed() || !this.framesDir || this.isInactive()) {
       return
     }
+    this.screencasts.set(page, { session: null as never, onFrame: () => {} })
     try {
       const session = await getCDPSessionForPage({ page })
+      if (this.isInactive() || page.isClosed()) {
+        this.screencasts.delete(page)
+        return
+      }
       // Chrome only emits screencastFrame when the compositor has a new frame.
+      // Playwright's CDP session already acks; do not ack again.
       const onFrame = (event: { data: string; sessionId: number; metadata?: { timestamp?: number } }) => {
-        void session.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {})
         if (!this.framesDir || this.state === 'stopped') {
           return
         }
         const at = event.metadata?.timestamp ? event.metadata.timestamp * 1000 : Date.now()
+        const ms = this.elapsedMs(at)
+        let name = `${ms}.jpg`
+        if (fs.existsSync(path.join(this.framesDir, name))) {
+          name = `${ms}-${this.frameCount + 1}.jpg`
+        }
+        fs.writeFileSync(path.join(this.framesDir, name), Buffer.from(event.data, 'base64'))
         this.frameCount += 1
-        const name = `${this.relativeTime(at).toFixed(1).padStart(7, '0')}-${String(this.frameCount).padStart(4, '0')}.jpg`
-        fs.writeFile(path.join(this.framesDir, name), Buffer.from(event.data, 'base64'), () => {})
       }
       session.on('Page.screencastFrame', onFrame)
       this.screencasts.set(page, { session, onFrame })
@@ -542,6 +714,7 @@ export class ActionRecorder {
         maxHeight: 720,
       })
     } catch (error) {
+      this.screencasts.delete(page)
       this.logger.error('[record] screencast failed:', error)
     }
   }
@@ -552,6 +725,9 @@ export class ActionRecorder {
       return
     }
     this.screencasts.delete(page)
+    if (!active.session) {
+      return
+    }
     active.session.off('Page.screencastFrame', active.onFrame)
     await active.session.send('Page.stopScreencast').catch(() => {})
   }
@@ -651,14 +827,14 @@ function installClickRipple() {
     return
   }
   win.__playwriterRipple = true
-  const style = document.createElement('style')
-  style.textContent =
-    '@keyframes __pwRipple{to{transform:scale(4);opacity:0}}'
-  document.documentElement.appendChild(style)
   window.addEventListener(
     'mousedown',
     (event) => {
       if (event.button !== 0) {
+        return
+      }
+      const root = document.documentElement
+      if (!root) {
         return
       }
       const el = document.createElement('div')
@@ -673,9 +849,13 @@ function installClickRipple() {
         'border:2px solid #ff2d55',
         'pointer-events:none',
         'z-index:2147483647',
-        'animation:__pwRipple .4s ease-out forwards',
+        'transition:transform .4s ease-out,opacity .4s ease-out',
       ].join(';')
-      document.documentElement.appendChild(el)
+      root.appendChild(el)
+      window.setTimeout(() => {
+        el.style.transform = 'scale(4)'
+        el.style.opacity = '0'
+      }, 0)
       setTimeout(() => {
         el.remove()
       }, 400)
@@ -707,9 +887,36 @@ function sanitizeLocatorText(text: string): string {
 export class ActionRecordingManager {
   private recordings = new Map<string, ActionRecorder>()
   private logger: RecorderLogger
+  private onActiveChanged: ((active: boolean) => void) | null
 
-  constructor({ logger }: { logger: RecorderLogger }) {
+  constructor({
+    logger,
+    onActiveChanged,
+  }: {
+    logger: RecorderLogger
+    onActiveChanged?: (active: boolean) => void
+  }) {
     this.logger = logger
+    this.onActiveChanged = onActiveChanged ?? null
+  }
+
+  private addRecording(recorder: ActionRecorder) {
+    this.recordings.set(recorder.recordingId, recorder)
+  }
+
+  private removeRecording(recordingId: string) {
+    if (!this.recordings.delete(recordingId)) {
+      return
+    }
+    if (this.recordings.size === 0) {
+      this.onActiveChanged?.(false)
+    }
+  }
+
+  private markActive() {
+    if (this.recordings.size === 1) {
+      this.onActiveChanged?.(true)
+    }
   }
 
   private nextRecordingId(): string {
@@ -725,7 +932,21 @@ export class ActionRecordingManager {
     return [...this.recordings.values()].find((r) => r.sessionId === sessionId) || null
   }
 
-  async start({ context, sessionId }: { context: BrowserContext; sessionId: string }): Promise<ActionRecorder> {
+  async start({
+    context,
+    sessionId,
+    maxDurationMs,
+    enableTimeoutMs,
+    disableTimeoutMs,
+    holdAfterEnable,
+  }: {
+    context: BrowserContext
+    sessionId: string
+    maxDurationMs?: number
+    enableTimeoutMs?: number
+    disableTimeoutMs?: number
+    holdAfterEnable?: () => Promise<void>
+  }): Promise<ActionRecorder> {
     const existing = this.activeRecordingForSession(sessionId)
     if (existing) {
       throw new RecordingError(
@@ -741,18 +962,23 @@ export class ActionRecordingManager {
         sessionId,
         recordingId: this.nextRecordingId(),
         logger: this.logger,
+        maxDurationMs,
+        enableTimeoutMs,
+        disableTimeoutMs,
+        holdAfterEnable,
       })
       // Reserve the id before the first await so concurrent starts in this
       // process can't pick the same id or bypass the duplicate-session guard
-      this.recordings.set(recorder.recordingId, recorder)
+      this.addRecording(recorder)
       recorder.onDidStop = () => {
-        this.recordings.delete(recorder.recordingId)
+        this.removeRecording(recorder.recordingId)
       }
       try {
         await recorder.start()
+        this.markActive()
         return recorder
       } catch (error) {
-        this.recordings.delete(recorder.recordingId)
+        this.removeRecording(recorder.recordingId)
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
           continue
         }
