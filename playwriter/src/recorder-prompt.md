@@ -3,7 +3,7 @@
 The user is now performing a workflow manually in their browser. Every click, fill,
 keypress, navigation, and mutating xhr/fetch is being written to a JSON event file.
 CDP screencast writes a jpeg into a frames folder whenever the page changes.
-User clicks flash a short ripple in those frames.
+User clicks flash a short ripple in those frames. Recording auto-stops after 20 minutes.
 
 The end goal: a **skill** (SKILL.md + importable utils script) that automates the
 same flow with playwriter. Follow the phases below in order.
@@ -85,15 +85,14 @@ errors/warnings), `page-error`, `recording-stopped` (includes `framesDir` and
 Important fields:
 
 - `framesDir` is a folder of jpegs. Chrome only emits a frame when the page
-  changes. Files are named `<t>-<seq>.jpg` where `t` is seconds since start
-  (same clock as event `t`). A pink ripple marks user clicks.
-- To see what happened around an action, list frames near that `t`:
+  changes. Files are named `<ms>.jpg` where `ms` is milliseconds since start.
+  Every event has the same `ms` field. A pink ripple marks user clicks.
+- Frame just before a click: last file whose name is `<=` that action's `ms`.
 
 ```bash
 FRAMES=$(playwriter recorder events | jq -r 'select(.framesDir) | .framesDir' | tail -1)
-ls "$FRAMES"
-# frames near action t=12.4
-ls "$FRAMES" | awk -F- '$1+0 >= 12.0 && $1+0 <= 13.0'
+# click at ms=8200
+ls "$FRAMES" | awk -F'[.-]' '$1+0 <= 8200 { print }' | tail -1
 ```
 
 - `action.code` uses page aliases: `page` is the first page, `page1`/`page2`/... are
