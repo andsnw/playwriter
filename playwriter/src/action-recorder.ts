@@ -1,11 +1,14 @@
 // Action recording for the `playwriter recorder` CLI feature.
 //
 // Playwright's API-mode recorder is the only action source. We persist those
-// actions plus mutating xhr/fetch. No post-action page work: it froze typing.
+// actions plus mutating xhr/fetch. CDP screencast writes a jpeg per visual
+// change into a timestamped folder. A click ripple marks user clicks in those
+// frames. No post-action page work: it froze typing.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { BrowserContext, Frame, Page, Request } from '@xmorse/playwright-core'
+import { getCDPSessionForPage, type ICDPSession } from './cdp-session.js'
 
 // Read at call time (not module load) so tests can point recordings at a temp
 // dir via PLAYWRITER_RECORDINGS_DIR without polluting ~/.playwriter
@@ -183,6 +186,9 @@ export class ActionRecorder {
   private onContextCloseHandler: (() => void) | null = null
   private onRequestFinishedHandler: ((request: Request) => void) | null = null
   private onRequestFailedHandler: ((request: Request) => void) | null = null
+  private framesDir: string | undefined
+  private frameCount = 0
+  private screencasts = new Map<Page, { session: ICDPSession; onFrame: (event: { data: string; sessionId: number; metadata?: { timestamp?: number } }) => void }>()
 
   constructor(options: ActionRecorderOptions) {
     this.context = options.context
@@ -325,14 +331,19 @@ export class ActionRecorder {
     for (const page of this.context.pages()) {
       this.attachPageListeners(page)
     }
+    await this.context.addInitScript(installClickRipple).catch(() => {})
 
+    this.framesDir = path.join(getRecordingsDir(), this.recordingId, 'frames')
+    fs.mkdirSync(this.framesDir, { recursive: true, mode: 0o700 })
     this.writeEvent({
       type: 'recording-started',
       startedAt: new Date(this.startedAt).toISOString(),
       sessionId: this.sessionId,
       recordingId: this.recordingId,
+      framesDir: this.framesDir,
       urls: this.context.pages().map((p) => safePageUrl(p)),
     })
+    await Promise.all(this.context.pages().map((page) => this.startPageScreencast(page)))
   }
 
   async stop(): Promise<{ eventCount: number; filePath: string }> {
@@ -345,11 +356,14 @@ export class ActionRecorder {
     this.flushPersist()
     // 2. Let in-flight captures finish. New captures can't be enqueued anymore.
     await this.captureChain.catch(() => {})
+    await this.stopAllScreencasts()
     // 3. Finalize
     this.state = 'stopped'
     this.writeEvent({
       type: 'recording-stopped',
       durationSeconds: Math.round((Date.now() - this.startedAt) / 1000),
+      framesDir: this.framesDir,
+      frameCount: this.frameCount,
     })
     this.flushPersist()
     const recorderContext = this.context as unknown as RecorderCapableContext
@@ -405,6 +419,7 @@ export class ActionRecorder {
         }
         this.writeEvent({ type: 'page-closed', url: safePageUrl(page) })
         this.pageHandlers.delete(page)
+        void this.stopPageScreencast(page)
       },
       // Downloads matter for document-harvesting flows (invoices, statements,
       // shipping labels): the skill needs to know which step produced the file
@@ -439,6 +454,8 @@ export class ActionRecorder {
       },
     }
     this.pageHandlers.set(page, handlers)
+    page.evaluate(installClickRipple).catch(() => {})
+    void this.startPageScreencast(page)
     page.on('framenavigated', handlers.framenavigated)
     page.on('close', handlers.close)
     page.on('download', handlers.download)
@@ -497,6 +514,50 @@ export class ActionRecorder {
       framePath,
       pageUrl: safePageUrl(page),
     })
+  }
+
+  private async startPageScreencast(page: Page) {
+    if (this.screencasts.has(page) || page.isClosed() || !this.framesDir) {
+      return
+    }
+    try {
+      const session = await getCDPSessionForPage({ page })
+      // Chrome only emits screencastFrame when the compositor has a new frame.
+      const onFrame = (event: { data: string; sessionId: number; metadata?: { timestamp?: number } }) => {
+        void session.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {})
+        if (!this.framesDir || this.state === 'stopped') {
+          return
+        }
+        const at = event.metadata?.timestamp ? event.metadata.timestamp * 1000 : Date.now()
+        this.frameCount += 1
+        const name = `${this.relativeTime(at).toFixed(1).padStart(7, '0')}-${String(this.frameCount).padStart(4, '0')}.jpg`
+        fs.writeFile(path.join(this.framesDir, name), Buffer.from(event.data, 'base64'), () => {})
+      }
+      session.on('Page.screencastFrame', onFrame)
+      this.screencasts.set(page, { session, onFrame })
+      await session.send('Page.startScreencast', {
+        format: 'jpeg',
+        quality: 50,
+        maxWidth: 1280,
+        maxHeight: 720,
+      })
+    } catch (error) {
+      this.logger.error('[record] screencast failed:', error)
+    }
+  }
+
+  private async stopPageScreencast(page: Page) {
+    const active = this.screencasts.get(page)
+    if (!active) {
+      return
+    }
+    this.screencasts.delete(page)
+    active.session.off('Page.screencastFrame', active.onFrame)
+    await active.session.send('Page.stopScreencast').catch(() => {})
+  }
+
+  private async stopAllScreencasts() {
+    await Promise.all([...this.screencasts.keys()].map((page) => this.stopPageScreencast(page)))
   }
 
   private lastAction(): RecordedEvent | undefined {
@@ -582,6 +643,45 @@ export class ActionRecorder {
     })
   }
 
+}
+
+function installClickRipple() {
+  const win = window as Window & { __playwriterRipple?: boolean }
+  if (win.__playwriterRipple) {
+    return
+  }
+  win.__playwriterRipple = true
+  const style = document.createElement('style')
+  style.textContent =
+    '@keyframes __pwRipple{to{transform:scale(4);opacity:0}}'
+  document.documentElement.appendChild(style)
+  window.addEventListener(
+    'mousedown',
+    (event) => {
+      if (event.button !== 0) {
+        return
+      }
+      const el = document.createElement('div')
+      el.style.cssText = [
+        'position:fixed',
+        `left:${event.clientX}px`,
+        `top:${event.clientY}px`,
+        'width:12px',
+        'height:12px',
+        'margin:-6px 0 0 -6px',
+        'border-radius:50%',
+        'border:2px solid #ff2d55',
+        'pointer-events:none',
+        'z-index:2147483647',
+        'animation:__pwRipple .4s ease-out forwards',
+      ].join(';')
+      document.documentElement.appendChild(el)
+      setTimeout(() => {
+        el.remove()
+      }, 400)
+    },
+    true,
+  )
 }
 
 function safePageUrl(page: Page): string {

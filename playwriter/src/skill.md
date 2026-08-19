@@ -261,7 +261,7 @@ The file is read from disk and executed in the same sandbox as `-e`. All context
 
 ### Recording user actions for skill generation
 
-`playwriter recorder start` records everything the user does in the browser (clicks, typing, navigations, mutating xhr/fetch) as events with generated locator strings. When the user asks you to "start recording", run it and let them perform their workflow. You may run playwriter commands on that session if they ask (snapshot, inspect, click something). If they did not ask, ask first. Do not drive the workflow yourself. Run `playwriter recorder stop` when they say done and `playwriter recorder events` to read the events. The `recorder start` output prints full instructions for turning a recording into a reusable skill (SKILL.md + utils script). Recording runs inside the relay daemon, so it survives CLI exits.
+`playwriter recorder start` records everything the user does in the browser (clicks, typing, navigations, mutating xhr/fetch) as events with generated locator strings. It also saves a jpeg of each visual change into a frames folder; user clicks flash a ripple in those frames. When the user asks you to "start recording", run it and let them perform their workflow. You may run playwriter commands on that session if they ask (snapshot, inspect, click something). If they did not ask, ask first. Do not drive the workflow yourself. Run `playwriter recorder stop` when they say done and `playwriter recorder events` to read the events. The `recorder start` output prints full instructions for turning a recording into a reusable skill (SKILL.md + utils script). Recording runs inside the relay daemon, so it survives CLI exits.
 
 ### Live streaming to RTMP (X Live, Twitch, YouTube)
 

@@ -2,6 +2,8 @@
 
 The user is now performing a workflow manually in their browser. Every click, fill,
 keypress, navigation, and mutating xhr/fetch is being written to a JSON event file.
+CDP screencast writes a jpeg into a frames folder whenever the page changes.
+User clicks flash a short ripple in those frames.
 
 The end goal: a **skill** (SKILL.md + importable utils script) that automates the
 same flow with playwriter. Follow the phases below in order.
@@ -57,6 +59,10 @@ playwriter recorder events 4 7 12
 # only the recorded actions with their locator code
 playwriter recorder events | jq -r 'select(.type == "action") | .code'
 
+# frames folder (one jpeg per visual change, named by timestamp)
+playwriter recorder events | jq -r 'select(.framesDir) | .framesDir' | tail -1
+ls ~/.playwriter/recordings/<id>/frames/
+
 # mutating xhr/fetch only (POST/PUT/PATCH/DELETE). Thin view shows sizes.
 playwriter recorder events | jq -r 'select(.type == "network") | [.id, .method, .status, .url, .responseBodySize] | @tsv'
 playwriter recorder events 14 15        # → full request postData + responseBody
@@ -73,9 +79,22 @@ Event types: `recording-started`, `action` (with `.code` = playwright locator co
 committed after an action), `navigation`, `page-opened`, `page-closed`, `network`
 (POST/PUT/PATCH/DELETE xhr/fetch only, with truncated `responseBody` for textual
 responses), `download` (url + suggested filename), `console` (page console
-errors/warnings), `page-error`, `recording-stopped`.
+errors/warnings), `page-error`, `recording-stopped` (includes `framesDir` and
+`frameCount`).
 
 Important fields:
+
+- `framesDir` is a folder of jpegs. Chrome only emits a frame when the page
+  changes. Files are named `<t>-<seq>.jpg` where `t` is seconds since start
+  (same clock as event `t`). A pink ripple marks user clicks.
+- To see what happened around an action, list frames near that `t`:
+
+```bash
+FRAMES=$(playwriter recorder events | jq -r 'select(.framesDir) | .framesDir' | tail -1)
+ls "$FRAMES"
+# frames near action t=12.4
+ls "$FRAMES" | awk -F- '$1+0 >= 12.0 && $1+0 <= 13.0'
+```
 
 - `action.code` uses page aliases: `page` is the first page, `page1`/`page2`/... are
   pages opened later (popups, new tabs). The `pageAlias` field on each action tells you
