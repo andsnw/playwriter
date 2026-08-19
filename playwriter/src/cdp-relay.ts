@@ -2366,6 +2366,15 @@ export async function startPlayWriterCDPRelayServer({
     return c.json(result)
   })
 
+  // Push a fire-and-forget notification to all connected extensions.
+  // No `id` field = no response expected; the extension handles it as a one-way event.
+  function notifyExtensionRecorderState(recording: boolean): void {
+    const message = JSON.stringify({ method: 'setRecorderState', params: { recording } })
+    for (const ext of store.getState().extensions.values()) {
+      ext.ws?.send(message)
+    }
+  }
+
   // ============================================================================
   // Action Record Endpoints - Record user interactions as a JSON array for skill
   // generation (playwriter recorder start/stop). Runs inside the relay daemon so
@@ -2379,6 +2388,9 @@ export async function startPlayWriterCDPRelayServer({
       actionRecordingManagerPromise = import('./action-recorder.js').then(({ ActionRecordingManager }) => {
         return new ActionRecordingManager({
           logger: logger || { log: console.error, error: console.error },
+          onActiveChanged: (active) => {
+            notifyExtensionRecorderState(active)
+          },
         })
       })
       // Don't cache a rejected import forever; allow the next call to retry
@@ -2403,14 +2415,19 @@ export async function startPlayWriterCDPRelayServer({
     try {
       body = await c.req.json()
     } catch {
-      return c.json({ error: 'Invalid JSON body' }, 400)
+      body = {}
     }
     try {
-      const sessionId = normalizeSessionId(body.sessionId)
-      if (!sessionId) {
-        return c.json({ error: 'sessionId is required' }, 400)
-      }
       const manager = await getExecutorManager()
+      // Default to the first (or only) session when sessionId is omitted
+      const sessionId: string = (() => {
+        const explicit = normalizeSessionId(body.sessionId)
+        if (explicit) return explicit
+        const sessions = manager.listSessions()
+        if (sessions.length === 1) return String(sessions[0]!.id)
+        if (sessions.length === 0) throw new Error("No sessions. Run 'playwriter session new' first.")
+        throw new Error(`Multiple sessions (${sessions.map((s) => s.id).join(', ')}). Pass a sessionId.`)
+      })()
       const executor = manager.getSession(sessionId)
       if (!executor) {
         return c.json({ error: `Session ${sessionId} not found. Run 'playwriter session new' first.` }, 404)
@@ -2418,6 +2435,7 @@ export async function startPlayWriterCDPRelayServer({
       const context = await executor.getBrowserContext()
       const recordingManager = await getActionRecordingManager()
       const recorder = await recordingManager.start({ context, sessionId })
+      notifyExtensionRecorderState(true)
       return c.json({ recordingId: recorder.recordingId, sessionId, file: recorder.filePath })
     } catch (error: any) {
       logger?.error('Record start endpoint error:', error)
@@ -2431,6 +2449,7 @@ export async function startPlayWriterCDPRelayServer({
       const recordingId = normalizeSessionId(body.recordingId)
       const recordingManager = await getActionRecordingManager()
       const result = await recordingManager.stop({ recordingId: recordingId || undefined })
+      notifyExtensionRecorderState(false)
       return c.json(result)
     } catch (error: any) {
       return c.json({ error: error.message }, recordingErrorStatus(error))

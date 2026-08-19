@@ -1435,6 +1435,7 @@ cli
         method: 'POST',
         headers,
         body: JSON.stringify({ sessionId }),
+        signal: AbortSignal.timeout(30_000),
       })
       const result = (await response.json()) as { recordingId?: string; file?: string; error?: string }
       if (!response.ok || !result.recordingId) {
