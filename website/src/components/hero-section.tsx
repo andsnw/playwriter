@@ -101,39 +101,26 @@ function StarRating({ rating }: { rating: number }) {
   )
 }
 
-function ArrowDownIcon() {
-  return (
-    <svg
-      width={12}
-      height={12}
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth={2}
-      strokeLinecap='round'
-      strokeLinejoin='round'
-    >
-      <path d='M12 5v14M19 12l-7 7-7-7' />
-    </svg>
-  )
-}
-
+// note: canvasClassName opacity utilities do NOT work — VideoBackgroundShader sets
+// inline `opacity: 1` on the same element once the canvas is ready, overriding any
+// class-based opacity. Dim via an outer wrapper div instead.
 function HeroBackground({ dotColor = 'rgba(255, 106, 0, 0.7)' }: { dotColor?: string }) {
   return (
-    <VideoBackgroundShader
-      src='/assets/hero-bg.mp4'
-      className='absolute inset-0 w-full h-full'
-      canvasClassName='dark:opacity-60 opacity-40'
-      dotColor={dotColor}
-      dotSize={6}
-      minDotSize={1}
-      dotMargin={1}
-      animSpeed={3}
-      gamma={0.8}
-      enableMask={false}
-      fluidStrength={0.15}
-      fluidCurl={80}
-    />
+    <div className='absolute inset-0 w-full h-full opacity-70'>
+      <VideoBackgroundShader
+        src='/assets/hero-bg.mp4'
+        className='absolute inset-0 w-full h-full'
+        dotColor={dotColor}
+        dotSize={6}
+        minDotSize={1}
+        dotMargin={1}
+        animSpeed={3}
+        gamma={0.8}
+        enableMask={false}
+        fluidStrength={0.15}
+        fluidCurl={80}
+      />
+    </div>
   )
 }
 
@@ -164,14 +151,14 @@ export function HeroSection() {
 
       {/* Foreground content */}
       <div
-        className='relative z-[2] flex flex-col items-center justify-center text-center max-w-[820px] mx-auto w-full px-5 py-18 sm:py-24 lg:py-28 gap-5'
+        className='relative z-[2] flex flex-col items-center justify-center text-center max-w-[820px] mx-auto w-full px-5 py-8 sm:py-10 lg:py-12 gap-4'
         style={{
           opacity: fontsReady ? 1 : 0,
           transition: 'opacity 0.3s cubic-bezier(0.23, 1, 0.32, 1)',
         }}
       >
         <h1
-          className='flex flex-col items-center leading-tight text-[40px] sm:text-[56px] md:text-[72px] text-foreground'
+          className='flex flex-col items-center leading-[1.1] text-[32px] sm:text-[42px] md:text-[52px] text-foreground'
           style={{ fontFamily: HERO_FONT }}
         >
           <span>let agents control</span>
@@ -202,14 +189,6 @@ export function HeroSection() {
 
         {/* 4.7 star rating */}
         <StarRating rating={4.7} />
-
-        <a
-          href='#getting-started'
-          className='mt-2 mb-2 flex flex-col items-center gap-1 text-[11px] font-mono text-foreground/30 hover:text-foreground/60 transition-colors no-underline'
-        >
-          Learn more
-          <ArrowDownIcon />
-        </a>
       </div>
     </div>
   )
@@ -220,9 +199,9 @@ export function ChangelogHeroSection() {
     <div className='relative z-0 mt-4 lg:mt-8 mb-6 lg:mb-10 w-screen ml-[calc(-50vw+50%)] flex flex-col items-center overflow-hidden'>
       <HeroBackground dotColor='rgba(100, 140, 255, 0.7)' />
 
-      <div className='relative z-[2] flex flex-col items-center justify-center text-center px-6 py-18 sm:py-24 lg:py-28'>
+      <div className='relative z-[2] flex flex-col items-center justify-center text-center px-6 py-8 sm:py-10 lg:py-12'>
         <h1
-          className='leading-tight text-[40px] sm:text-[56px] md:text-[72px] text-foreground'
+          className='leading-[1.1] text-[32px] sm:text-[42px] md:text-[52px] text-foreground'
           style={{ fontFamily: HERO_FONT }}
         >
           changelog
@@ -253,14 +232,14 @@ export function CloudHeroSection() {
 
       {/* Foreground content */}
       <div
-        className='relative z-[2] flex flex-col items-center justify-center text-center max-w-[820px] mx-auto w-full px-5 py-18 sm:py-24 lg:py-28 gap-5'
+        className='relative z-[2] flex flex-col items-center justify-center text-center max-w-[820px] mx-auto w-full px-5 py-8 sm:py-10 lg:py-12 gap-4'
         style={{
           opacity: fontsReady ? 1 : 0,
           transition: 'opacity 0.3s cubic-bezier(0.23, 1, 0.32, 1)',
         }}
       >
         <h1
-          className='flex flex-col items-center leading-tight text-[40px] sm:text-[56px] md:text-[72px] text-foreground'
+          className='flex flex-col items-center leading-[1.1] text-[32px] sm:text-[42px] md:text-[52px] text-foreground'
           style={{ fontFamily: HERO_FONT }}
         >
           <span>stealth browsers that</span>
@@ -280,14 +259,6 @@ export function CloudHeroSection() {
 
         {/* 4.7 star rating */}
         <StarRating rating={4.7} />
-
-        <a
-          href='#pricing'
-          className='mt-2 mb-2 flex flex-col items-center gap-1 text-[11px] font-mono text-foreground/30 hover:text-foreground/60 transition-colors no-underline'
-        >
-          Learn more
-          <ArrowDownIcon />
-        </a>
       </div>
     </div>
   )
