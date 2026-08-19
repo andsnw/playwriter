@@ -18,6 +18,8 @@ import {
 import './test-declarations.js'
 
 const TEST_PORT = 19987
+const SERVER_URL = `http://127.0.0.1:${TEST_PORT}`
+const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 describe('Relay Core Tests', () => {
   let client: Awaited<ReturnType<typeof createMCPClient>>['client']
@@ -842,6 +844,90 @@ describe('Relay Core Tests', () => {
         `,
       },
     })
+  }, 30000)
+
+  it('should include uncaught errors from only the CLI session tracked page', async () => {
+    const browserContext = getBrowserContext()
+    const serviceWorker = await getExtensionServiceWorker(browserContext)
+    const pageA = await browserContext.newPage()
+    const pageB = await browserContext.newPage()
+
+    const createCliSession = async (): Promise<string> => {
+      const response = await fetch(`${SERVER_URL}/cli/session/new`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      })
+      const result = (await response.json()) as { id: string }
+      return result.id
+    }
+    const executeCli = async ({ sessionId, code }: { sessionId: string; code: string }) => {
+      const response = await fetch(`${SERVER_URL}/cli/execute`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ sessionId, code }),
+      })
+      return (await response.json()) as { text: string; isError: boolean }
+    }
+
+    let sessionA = ''
+    let sessionB = ''
+    try {
+      await pageA.goto('data:text/html,<title>tracked-agent-a</title>')
+      await pageA.bringToFront()
+      await serviceWorker.evaluate(async () => {
+        await globalThis.toggleExtensionForActiveTab()
+      })
+      await pageB.goto('data:text/html,<title>tracked-agent-b</title>')
+      await pageB.bringToFront()
+      await serviceWorker.evaluate(async () => {
+        await globalThis.toggleExtensionForActiveTab()
+      })
+
+      sessionA = await createCliSession()
+      sessionB = await createCliSession()
+      await executeCli({
+        sessionId: sessionA,
+        code: `state.page = context.pages().find((page) => page.url().includes('tracked-agent-a'))`,
+      })
+      await executeCli({
+        sessionId: sessionB,
+        code: `state.page = context.pages().find((page) => page.url().includes('tracked-agent-b')); state.pageError = state.page.waitForEvent('pageerror')`,
+      })
+
+      const sessionAResult = await executeCli({
+        sessionId: sessionA,
+        code: js`
+          const otherPage = context.pages().find((page) => page.url().includes('tracked-agent-b'));
+          const pageError = state.page.waitForEvent('pageerror');
+          await state.page.evaluate(() => setTimeout(() => { throw new Error('tracked-agent-a-error'); }, 0));
+          await otherPage.evaluate(() => setTimeout(() => { throw new Error('tracked-agent-b-error'); }, 0));
+          await pageError;
+        `,
+      })
+      expect(sessionAResult.text).toContain('[PAGE ERROR] tracked-agent-a-error')
+      expect(sessionAResult.text).not.toContain('tracked-agent-b-error')
+      expect(sessionAResult.isError).toBe(false)
+
+      const sessionBResult = await executeCli({
+        sessionId: sessionB,
+        code: 'await state.pageError; return state.page.url()',
+      })
+      expect(sessionBResult.text).toContain('[PAGE ERROR] tracked-agent-b-error')
+      expect(sessionBResult.text).not.toContain('tracked-agent-a-error')
+      expect(sessionBResult.isError).toBe(false)
+    } finally {
+      await Promise.all([pageA.close(), pageB.close()])
+      await Promise.all(
+        [sessionA, sessionB].filter(Boolean).map(async (sessionId) => {
+          await fetch(`${SERVER_URL}/cli/session/delete`, {
+            method: 'POST',
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ sessionId }),
+          })
+        }),
+      )
+    }
   }, 30000)
 
   it('should keep logs separate between different pages', async () => {

@@ -119,6 +119,19 @@ use `--latest=false` for extension releases so they don't override the CLI relea
 
 ### testing
 
+#### new worktree setup
+
+before running tests for the first time in a new worktree, run these commands from the repository root:
+
+```bash
+pnpm bootstrap
+pnpm --filter playwriter build
+```
+
+`pnpm bootstrap` generates Playwright's injected sources and builds the local `@xmorse/playwright-core` fork. the playwriter build then creates client bundles used by the extension test build.
+
+do not run only `pnpm playwright:build` in a fresh worktree. it does not generate the injected sources. missing setup causes errors such as `Cannot find module './lib/inprocess'`, `Cannot find module '../generated/clockSource'`, or unresolved `playwriter/dist/ghost-cursor-client.js?raw` and `playwriter/dist/bippy.js?raw` imports.
+
 ```bash
 pnpm test              # run all tests (takes ~90 seconds)
 pnpm test -t "screenshot"  # run specific test by name

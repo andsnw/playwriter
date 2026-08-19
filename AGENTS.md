@@ -71,10 +71,10 @@ to test CLI changes without publishing:
 
 ### reloading extension during development
 
-after making changes to extension code:
+after making changes to extension or playwriter code:
 
 ```bash
-pnpm --filter mcp-extension reload  # builds and opens chrome://extensions page
+pnpm reload  # builds playwriter, restarts the relay daemon, builds and opens chrome://extensions
 ```
 
 then click the reload button on the extension card in Chrome. the extension has a stable dev ID (`pebbngnfojnignonigcnkdilknapkgid`) so you don't need to reconfigure anything.
@@ -120,6 +120,19 @@ read `extension/CHANGELOG.md` entries since the last extension GitHub release, m
 use `--latest=false` for extension releases so they don't override the CLI release as the "Latest" GitHub release. the CLI release should always be the latest one.
 
 ### testing
+
+#### new worktree setup
+
+before running tests for the first time in a new worktree, run these commands from the repository root:
+
+```bash
+pnpm bootstrap
+pnpm --filter playwriter build
+```
+
+`pnpm bootstrap` generates Playwright's injected sources and builds the local `@xmorse/playwright-core` fork. the playwriter build then creates client bundles used by the extension test build.
+
+do not run only `pnpm playwright:build` in a fresh worktree. it does not generate the injected sources. missing setup causes errors such as `Cannot find module './lib/inprocess'`, `Cannot find module '../generated/clockSource'`, or unresolved `playwriter/dist/ghost-cursor-client.js?raw` and `playwriter/dist/bippy.js?raw` imports.
 
 ```bash
 pnpm test              # run all tests (takes ~90 seconds)

@@ -408,7 +408,8 @@ Writing to any other path (e.g. `~/Downloads`, `~/Desktop`) throws `EPERM: opera
 - **No bringToFront**: never call unless user asks - it's disruptive and unnecessary, you can interact with background pages
 - **Click before keyboard input in extension mode.** Call `click()` on the target field immediately before `fill()` or `keyboard` methods. CDP sends keyboard input to the browser's OS-focused surface, so DOM focus and `bringToFront()` can still leave text in Chrome's omnibox.
 - **Check state after actions**: always verify page state after clicking/submitting (see next section)
-- **Clean up listeners**: call `state.page.removeAllListeners()` at end of message to prevent leaks
+- **Clean up only your listeners**: remove listeners you added by event name or handler reference. Never call `removeAllListeners()` because it also removes Playwriter's page error and console listeners.
+- **Tracked page errors are automatic**: uncaught errors from pages assigned directly to `state` keys appear in the current or next execute output as `[PAGE ERROR]`. Errors from pages tracked by other sessions are excluded.
 - **Always print page logs after every action**: call `getLatestLogs({ page: state.page, sinceLastCall: true })` after every goto, click, or submit to catch console errors and warnings. Do not manually collect `page.on('console')` events; manual listeners miss logs emitted before the listener is attached. The first `sinceLastCall` call returns all buffered logs including startup and hydration errors.
 - **CDP sessions**: use `getCDPSession({ page: state.page })` not `state.page.context().newCDPSession()` - NEVER use `newCDPSession()` method, it doesn't work through playwriter relay
 - **Wait for load**: use `state.page.waitForLoadState('domcontentloaded')` not `state.page.waitForEvent('load')` - waitForEvent times out if already loaded
@@ -896,6 +897,8 @@ For carousels or lazy-loaded galleries, you may need to click navigation arrows 
 **getLatestLogs** - retrieve captured browser console logs and page errors (up to 5000 per page):
 
 Always use this helper when inspecting browser logs. Do not attach new `page.on('console')` listeners for debugging because they only see future events and can miss logs emitted during page startup or hydration.
+
+Uncaught errors from pages assigned directly to `state` keys also appear automatically in execute output. `getLatestLogs()` keeps the full page log history for filtering and deeper diagnosis.
 
 Use `sinceLastCall: true` after every action to get only new logs since the previous call. The first call returns all buffered logs including pre-existing ones. Logs persist across navigations so you never miss errors from page transitions.
 

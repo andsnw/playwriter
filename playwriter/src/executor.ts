@@ -316,12 +316,13 @@ export interface ExecuteResult {
   isError: boolean
 }
 
-interface WarningEvent {
+interface OutputEvent {
   id: number
+  type: 'warning' | 'page-error'
   message: string
 }
 
-interface WarningScope {
+interface OutputScope {
   cursor: number
 }
 
@@ -417,16 +418,16 @@ export class PlaywrightExecutor {
   private pageLogCursor: Map<Page, number> = new Map()
   private lastSnapshots: WeakMap<Page, Map<string, string>> = new WeakMap()
   private lastRefToLocator: WeakMap<Page, Map<string, string>> = new WeakMap()
-  private warningEvents: WarningEvent[] = []
-  private nextWarningEventId = 0
-  private lastDeliveredWarningEventId = 0
+  private outputEvents: OutputEvent[] = []
+  private nextOutputEventId = 0
+  private lastDeliveredOutputEventId = 0
 
   // Recording timestamp tracking: when recording is active, each execute()
   // call pushes {start, end} (seconds relative to recordingStartedAt).
   // Returned by stopRecording() so the model can speed up idle sections.
   private recordingStartedAt: number | null = null
   private executionTimestamps: Array<{ start: number; end: number }> = []
-  private activeWarningScopes = new Set<WarningScope>()
+  private activeOutputScopes = new Set<OutputScope>()
   private pagesWithListeners = new WeakSet<Page>()
   private suppressPageCloseWarnings = false
 
@@ -559,8 +560,12 @@ export class PlaywrightExecutor {
   }
 
   enqueueWarning(message: string) {
-    this.nextWarningEventId += 1
-    this.warningEvents.push({ id: this.nextWarningEventId, message })
+    this.enqueueOutputEvent({ type: 'warning', message })
+  }
+
+  private enqueueOutputEvent(event: Omit<OutputEvent, 'id'>) {
+    this.nextOutputEventId += 1
+    this.outputEvents.push({ id: this.nextOutputEventId, ...event })
   }
 
   /** Update the cloud session timeout from external tracking (relay timer). */
@@ -570,45 +575,55 @@ export class PlaywrightExecutor {
     }
   }
 
-  private beginWarningScope(): WarningScope {
-    // Use lastDeliveredWarningEventId as cursor (not nextWarningEventId) so
-    // warnings enqueued by the relay interval between execute() calls are
-    // picked up by the next scope. Using nextWarningEventId would skip them.
-    const scope: WarningScope = {
-      cursor: this.lastDeliveredWarningEventId,
+  private beginOutputScope(): OutputScope {
+    // Use lastDeliveredOutputEventId as cursor (not nextOutputEventId) so
+    // events enqueued between execute() calls are picked up by the next scope.
+    // Using nextOutputEventId would skip them.
+    const scope: OutputScope = {
+      cursor: this.lastDeliveredOutputEventId,
     }
-    this.activeWarningScopes.add(scope)
+    this.activeOutputScopes.add(scope)
     return scope
   }
 
-  private flushWarningsForScope(scope: WarningScope): string {
-    const relevantWarnings = this.warningEvents.filter((warning) => {
-      return warning.id > scope.cursor
+  private flushOutputForScope(scope: OutputScope): string {
+    const relevantEvents = this.outputEvents.filter((event) => {
+      return event.id > scope.cursor
     })
-    const latestWarningId = relevantWarnings.at(-1)?.id
-    if (latestWarningId && latestWarningId > this.lastDeliveredWarningEventId) {
-      this.lastDeliveredWarningEventId = latestWarningId
+    const latestEventId = relevantEvents.at(-1)?.id
+    if (latestEventId && latestEventId > this.lastDeliveredOutputEventId) {
+      this.lastDeliveredOutputEventId = latestEventId
     }
 
-    this.activeWarningScopes.delete(scope)
-    this.pruneDeliveredWarnings()
+    this.activeOutputScopes.delete(scope)
+    this.pruneDeliveredOutputEvents()
 
-    if (relevantWarnings.length === 0) {
+    if (relevantEvents.length === 0) {
       return ''
     }
 
-    return `${relevantWarnings.map((warning) => `[WARNING] ${warning.message}`).join('\n')}\n`
+    return `${relevantEvents
+      .map((event) => `[${event.type === 'warning' ? 'WARNING' : 'PAGE ERROR'}] ${event.message}`)
+      .join('\n')}\n`
   }
 
-  private pruneDeliveredWarnings() {
-    const activeCursors = [...this.activeWarningScopes].map((scope) => {
+  private pruneDeliveredOutputEvents() {
+    const activeCursors = [...this.activeOutputScopes].map((scope) => {
       return scope.cursor
     })
-    const minActiveCursor = activeCursors.length > 0 ? Math.min(...activeCursors) : this.lastDeliveredWarningEventId
-    const pruneBeforeOrAt = Math.min(this.lastDeliveredWarningEventId, minActiveCursor)
-    this.warningEvents = this.warningEvents.filter((warning) => {
-      return warning.id > pruneBeforeOrAt
+    const minActiveCursor = activeCursors.length > 0 ? Math.min(...activeCursors) : this.lastDeliveredOutputEventId
+    const pruneBeforeOrAt = Math.min(this.lastDeliveredOutputEventId, minActiveCursor)
+    this.outputEvents = this.outputEvents.filter((event) => {
+      return event.id > pruneBeforeOrAt
     })
+  }
+
+  private stateKeysForPage(page: Page): string[] {
+    return Object.entries(this.userState)
+      .filter(([, value]) => {
+        return value === page
+      })
+      .map(([key]) => key)
   }
 
   private warnIfExtensionOutdated(playwriterVersion: string | null) {
@@ -641,11 +656,7 @@ export class PlaywrightExecutor {
 
   private setupPageCloseDetection(page: Page) {
     page.on('close', () => {
-      const stateKeysForClosedPage = Object.entries(this.userState)
-        .filter(([, value]) => {
-          return value === page
-        })
-        .map(([key]) => key)
+      const stateKeysForClosedPage = this.stateKeysForPage(page)
 
       const wasCurrentPage = this.page === page
       let replacementPageInfo: { index: string; url: string } | null = null
@@ -742,6 +753,9 @@ export class PlaywrightExecutor {
 
     page.on('pageerror', (error) => {
       this.addBrowserLog({ page, logEntry: `[pageerror] ${error.message}` })
+      if (this.stateKeysForPage(page).length > 0) {
+        this.enqueueOutputEvent({ type: 'page-error', message: error.message })
+      }
     })
   }
 
@@ -1174,7 +1188,7 @@ export class PlaywrightExecutor {
 
   async execute(code: string, timeout = 10000): Promise<ExecuteResult> {
     const consoleLogs: Array<{ method: string; args: any[] }> = []
-    const warningScope = this.beginWarningScope()
+    const outputScope = this.beginOutputScope()
 
     const formatConsoleLogs = (logs: Array<{ method: string; args: any[] }>, prefix = 'Console output') => {
       if (logs.length === 0) {
@@ -1808,7 +1822,7 @@ export class PlaywrightExecutor {
         }
       }
 
-      responseText += this.flushWarningsForScope(warningScope)
+      responseText = this.flushOutputForScope(outputScope) + responseText
 
       if (!responseText.trim()) {
         responseText = 'Code executed successfully (no output)'
@@ -1843,7 +1857,7 @@ export class PlaywrightExecutor {
       this.logger.error('Error in execute:', errorStack)
 
       const logsText = formatConsoleLogs(consoleLogs, 'Console output (before error)')
-      const warningText = this.flushWarningsForScope(warningScope)
+      const outputText = this.flushOutputForScope(outputScope)
 
       // Cloud sessions: disconnection errors mean the VM expired or was destroyed.
       // Give a clear actionable message instead of a generic "call reset" hint.
@@ -1859,7 +1873,7 @@ export class PlaywrightExecutor {
       // timeout stacks are internal noise (Promise.race / setTimeout); only show the message
       const errorText = isTimeoutError ? error.message : errorStack
       return {
-        text: `${logsText}${warningText}\nError executing code: ${errorText}${resetHint}`,
+        text: `${outputText}${logsText}\nError executing code: ${errorText}${resetHint}`,
         images: [],
         screenshots: [],
         isError: true,
