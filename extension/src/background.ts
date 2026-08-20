@@ -1577,43 +1577,48 @@ function detachTab(tabId: number, shouldDetachDebugger: boolean): void {
 
 // Inject start/stop recording callbacks into a single tab's toolbar.
 // Called on tab attach and whenever the relay notifies a state change.
+//
+// Routed through extension messaging (MAIN → ISOLATED → service worker → relay)
+// instead of direct fetch to avoid CORS failures on cross-origin pages.
+// The service worker can fetch localhost freely from the extension context.
+// Uses window.postMessage (the Chrome-documented cross-world communication
+// pattern) because CustomEvent does not reliably cross MAIN↔ISOLATED worlds.
 function injectRecorderCallbacks(tabId: number): void {
+  // 1. ISOLATED world bridge: catches postMessage from MAIN world, forwards
+  //    to service worker via chrome.runtime.sendMessage
   chrome.scripting
     .executeScript({
       target: { tabId, allFrames: false },
-      world: 'MAIN',
-      func: (host: string, port: number) => {
-        const baseUrl = `http://${host}:${port}`
-        ;(window as any).__playwriterToolbarStartRecording = () => {
-          fetch(`${baseUrl}/recorder/start`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-          }).catch(() => {})
-        }
-        ;(window as any).__playwriterToolbarStopRecording = () => {
-          fetch(`${baseUrl}/recorder/stop`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-          })
-            .then((r) => r.json())
-            .then((result: { recordingId?: string }) => {
-              if (!result.recordingId) return
-              const prompt = [
-                'I just recorded a browser workflow (recording ' + result.recordingId + ').',
-                'Analyze it and create a reusable skill from it.',
-                '',
-                'Run:',
-                'playwriter recorder events',
-              ].join('\n')
-              navigator.clipboard.writeText(prompt).catch(() => {})
-              ;(window as any).__playwriterToolbarSetRecording?.(false)
-            })
-            .catch(() => {})
-        }
+      world: 'ISOLATED',
+      func: () => {
+        if ((window as any).__playwriterRecorderBridge) return
+        ;(window as any).__playwriterRecorderBridge = true
+        window.addEventListener('message', (event: MessageEvent) => {
+          if (event.source !== window) return
+          if (event.data?.__playwriter === 'recorder_start') {
+            chrome.runtime.sendMessage({ action: 'actionRecorderStart' })
+          }
+          if (event.data?.__playwriter === 'recorder_stop') {
+            chrome.runtime.sendMessage({ action: 'actionRecorderStop' })
+          }
+        })
       },
-      args: [RELAY_HOST, RELAY_PORT],
+    })
+    .then(() => {
+      // 2. MAIN world callbacks: the toolbar calls these on button click.
+      //    Posts structured messages instead of fetching directly.
+      return chrome.scripting.executeScript({
+        target: { tabId, allFrames: false },
+        world: 'MAIN',
+        func: () => {
+          ;(window as any).__playwriterToolbarStartRecording = () => {
+            window.postMessage({ __playwriter: 'recorder_start' }, '*')
+          }
+          ;(window as any).__playwriterToolbarStopRecording = () => {
+            window.postMessage({ __playwriter: 'recorder_stop' }, '*')
+          }
+        },
+      })
     })
     .catch(() => {})
 }
@@ -2447,8 +2452,89 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
 // Sync icons on first load
 void updateIcons()
 
-// Handle messages from offscreen document (recording chunks)
-chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+// Handle messages from content scripts (recorder commands) and offscreen document (recording chunks)
+chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
+  // Action recorder start/stop: routed through extension messaging to avoid CORS.
+  // MAIN world toolbar → ISOLATED content script → here → relay HTTP endpoint.
+  if (message.action === 'actionRecorderStart') {
+    const senderTabId = sender.tab?.id
+    fetch(`http://${RELAY_HOST}:${RELAY_PORT}/recorder/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+      .then(async (response) => {
+        const result = (await response.json()) as { error?: string }
+        if (response.ok) {
+          return
+        }
+        logger.error('Action recorder start failed:', result.error || response.status)
+        if (!senderTabId) {
+          return
+        }
+        await chrome.scripting.executeScript({
+          target: { tabId: senderTabId, allFrames: false },
+          world: 'MAIN',
+          func: (msg: string) => {
+            ;(window as any).__playwriterToolbarShowToast?.(msg)
+          },
+          args: [result.error || 'Failed to start recording'],
+        })
+      })
+      .catch((err) => {
+        logger.error('Action recorder start failed:', err)
+      })
+    return false
+  }
+
+  if (message.action === 'actionRecorderStop') {
+    const senderTabId = sender.tab?.id
+    fetch(`http://${RELAY_HOST}:${RELAY_PORT}/recorder/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+      .then((r) => r.json())
+      .then((result: { recordingId?: string }) => {
+        if (!result.recordingId || !senderTabId) return
+        const prompt = [
+          'I just recorded a browser workflow (recording ' + result.recordingId + ').',
+          'Analyze it and create a reusable skill from it.',
+          '',
+          'Run:',
+          'playwriter recorder events',
+        ].join('\n')
+        chrome.scripting
+          .executeScript({
+            target: { tabId: senderTabId, allFrames: false },
+            world: 'MAIN',
+            func: (text: string) => {
+              navigator.clipboard.writeText(text).catch(() => {
+                try {
+                  const ta = document.createElement('textarea')
+                  ta.value = text
+                  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;'
+                  document.body.appendChild(ta)
+                  ta.focus()
+                  ta.select()
+                  document.execCommand('copy')
+                  ta.remove()
+                } catch {}
+              })
+              ;(window as any).__playwriterToolbarSetRecording?.(false)
+              ;(window as any).__playwriterToolbarShowToast?.('Prompt copied to clipboard')
+              ;(window as any).__playwriterToolbarPlaySound?.('success')
+            },
+            args: [prompt],
+          })
+          .catch(() => {})
+      })
+      .catch((err) => {
+        logger.error('Action recorder stop failed:', err)
+      })
+    return false
+  }
+
   if (message.action === 'recordingChunk') {
     const { tabId, data, final } = message
 
