@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { BrowserContext } from '@xmorse/playwright-core'
-import { ActionRecordingManager, parseRecording } from './action-recorder.js'
+import { ActionRecordingManager, isTelemetryUrl, parseRecording } from './action-recorder.js'
 
 function createFakeContext(options: {
   enable?: () => Promise<void>
@@ -40,6 +40,17 @@ function wait(ms: number) {
     setTimeout(resolve, ms)
   })
 }
+
+describe('isTelemetryUrl', () => {
+  test('drops analytics collectors and keeps site APIs', () => {
+    expect(isTelemetryUrl('https://www.google-analytics.com/j/collect?v=1')).toBe(true)
+    expect(isTelemetryUrl('https://region1.google-analytics.com/g/collect?v=2')).toBe(true)
+    expect(isTelemetryUrl('https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query')).toBe(false)
+    expect(isTelemetryUrl('https://news.ycombinator.com/x')).toBe(false)
+    expect(isTelemetryUrl('https://api.twitter.com/2/tweets')).toBe(false)
+    expect(isTelemetryUrl('https://example.com/api?next=https://analytics.example')).toBe(false)
+  })
+})
 
 describe('ActionRecordingManager start lifecycle', () => {
   test('start times out a hung _enableRecorder and leaves no active recording', async () => {

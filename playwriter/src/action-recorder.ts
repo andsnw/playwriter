@@ -123,6 +123,36 @@ const MAX_RESPONSE_BODY_CHARS = 50000
 const MAX_POST_DATA_CHARS = 10000
 const MAX_CONSOLE_TEXT_CHARS = 2000
 const TEXTUAL_CONTENT_TYPE = /json|text|xml|x-www-form-urlencoded|graphql/i
+const TELEMETRY_HOST_SUFFIXES = [
+  'google-analytics.com',
+  'googletagmanager.com',
+  'doubleclick.net',
+  'googlesyndication.com',
+  'googleadservices.com',
+  'hotjar.com',
+  'mixpanel.com',
+  'segment.io',
+  'segment.com',
+  'fullstory.com',
+  'amplitude.com',
+  'clarity.ms',
+]
+
+export function isTelemetryUrl(url: string): boolean {
+  const hostname = (() => {
+    try {
+      return new URL(url).hostname.toLowerCase()
+    } catch {
+      return ''
+    }
+  })()
+  if (!hostname) {
+    return false
+  }
+  return TELEMETRY_HOST_SUFFIXES.some((suffix) => {
+    return hostname === suffix || hostname.endsWith(`.${suffix}`)
+  })
+}
 
 function truncate(value: string, max: number): string {
   if (value.length <= max) {
@@ -145,8 +175,11 @@ export function projectThinEvent(event: RecordedEvent): RecordedEvent {
   }
   replaceWithSize('responseBody', 'responseBodySize')
   replaceWithSize('postData', 'postDataSize')
-  if ((event.type === 'console' || event.type === 'page-error') && typeof event.text === 'string') {
+  if (event.type === 'console' && typeof event.text === 'string') {
     thin.text = truncate(event.text, 200)
+  }
+  if (event.type === 'page-error' && typeof event.message === 'string') {
+    thin.message = truncate(event.message, 200)
   }
   return thin
 }
@@ -644,6 +677,7 @@ export class ActionRecorder {
     const clickCount = typeof actionInContext.action.clickCount === 'number' ? actionInContext.action.clickCount : undefined
     const pageAlias = actionInContext.frame?.pageAlias
     const framePath = actionInContext.frame?.framePath?.length ? actionInContext.frame.framePath : undefined
+    const extras = extraActionFields(actionInContext.action)
     // actionUpdated = same fill / dblclick. Only edit if it is the same action.
     if (isUpdate) {
       const last = this.lastAction()
@@ -659,6 +693,7 @@ export class ActionRecorder {
         if (clickCount !== undefined) {
           last.clickCount = clickCount
         }
+        Object.assign(last, extras)
         this.persist()
         return
       }
@@ -672,6 +707,7 @@ export class ActionRecorder {
       pageAlias,
       framePath,
       pageUrl: safePageUrl(page),
+      ...extras,
     })
   }
 
@@ -782,7 +818,7 @@ export class ActionRecorder {
       return
     }
     const url = request.url()
-    if (url.startsWith('data:') || url.startsWith('chrome-extension:')) {
+    if (url.startsWith('data:') || url.startsWith('chrome-extension:') || isTelemetryUrl(url)) {
       return
     }
     // Timestamp is captured now (when the request finished), not when the
@@ -876,6 +912,31 @@ function safePageUrl(page: Page): string {
 // so recorded locators stay `getByRole('button', { name: 'Login' })`.
 function sanitizeLocatorText(text: string): string {
   return text.replace(/[\uE000-\uF8FF]\s*/g, '').replace(/\s+/g, ' ')
+}
+
+// Fields Playwright already puts on the action object. Copy them onto the
+// recorded event so agents do not have to parse `.code`.
+function extraActionFields(action: { [key: string]: unknown }): Record<string, unknown> {
+  const fields: Record<string, unknown> = {}
+  if (typeof action.text === 'string') {
+    fields.text = action.text
+  }
+  if (typeof action.key === 'string') {
+    fields.key = action.key
+  }
+  if (Array.isArray(action.options)) {
+    fields.options = action.options
+  }
+  if (Array.isArray(action.files)) {
+    fields.files = action.files
+  }
+  if (typeof action.button === 'string') {
+    fields.button = action.button
+  }
+  if (typeof action.modifiers === 'number') {
+    fields.modifiers = action.modifiers
+  }
+  return fields
 }
 
 // ============================================================================
