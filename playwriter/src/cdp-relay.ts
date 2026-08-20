@@ -2436,14 +2436,35 @@ export async function startPlayWriterCDPRelayServer({
     }
     try {
       const manager = await getExecutorManager()
-      // Default to the first (or only) session when sessionId is omitted
+      // Toolbar sends no sessionId. Reuse the only session, or create one.
       const sessionId: string = (() => {
         const explicit = normalizeSessionId(body.sessionId)
-        if (explicit) return explicit
+        if (explicit) {
+          return explicit
+        }
         const sessions = manager.listSessions()
-        if (sessions.length === 1) return String(sessions[0]!.id)
-        if (sessions.length === 0) throw new Error("No sessions. Run 'playwriter session new' first.")
-        throw new Error(`Multiple sessions (${sessions.map((s) => s.id).join(', ')}). Pass a sessionId.`)
+        if (sessions.length === 1) {
+          return String(sessions[0]!.id)
+        }
+        if (sessions.length > 1) {
+          throw new Error(`Multiple sessions (${sessions.map((s) => s.id).join(', ')}). Pass a sessionId.`)
+        }
+        const conn = getExtensionConnection(null, {
+          allowFallback: store.getState().extensions.size === 1,
+        })
+        if (!conn) {
+          throw new Error('Extension is not connected. Enable Playwriter on a tab first.')
+        }
+        const createdId = String(nextSessionNumber++)
+        manager.getExecutor({
+          sessionId: createdId,
+          sessionMetadata: {
+            extensionId: conn.stableKey,
+            browser: conn.info.browser || null,
+            profile: conn.info ? { email: conn.info.email || '', id: conn.info.id || '' } : null,
+          },
+        })
+        return createdId
       })()
       const executor = manager.getSession(sessionId)
       if (!executor) {
