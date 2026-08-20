@@ -15,6 +15,8 @@ declare global {
     __playwriterToolbarSetRecording?: (recording: boolean) => void
     __playwriterToolbarStopRecording?: (() => void) | null
     __playwriterToolbarStartRecording?: (() => void) | null
+    __playwriterToolbarShowToast?: (msg: string) => void
+    __playwriterToolbarPlaySound?: (name: string) => void
     __playwriterPinCount?: number
     // Template literal index for pinned element globals (playwriterPinnedElem1, etc.)
     [key: `playwriterPinnedElem${number}`]: Element | undefined
@@ -182,10 +184,11 @@ export function initPlaywriterToolbar(): void {
       color: rgba(228,228,231,1);
     }
     .record-btn.active {
-      color: rgba(248,113,113,0.9);
+      color: rgba(161,161,170,1);
     }
     .record-btn.active:hover {
-      background: rgba(239,68,68,0.15);
+      background: rgba(255,255,255,0.08);
+      color: rgba(228,228,231,1);
     }
     .toast {
       position: fixed;
@@ -205,6 +208,31 @@ export function initPlaywriterToolbar(): void {
     @keyframes toast-in {
       from { opacity: 0; transform: var(--toast-transform) translateY(4px); }
       to   { opacity: 1; transform: var(--toast-transform); }
+    }
+    [data-tooltip] {
+      position: relative;
+    }
+    [data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 5px 10px;
+      background: #0f172a;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 11px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      white-space: nowrap;
+      border-radius: 6px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
+    [data-tooltip]:hover::after {
+      opacity: 1;
+      transition: opacity 0.15s ease 0.3s;
     }
   `
 
@@ -440,6 +468,7 @@ export function initPlaywriterToolbar(): void {
 
     const target = getTargetAt(e.clientX, e.clientY)
     if (!target) return
+    playSound('success')
 
     const name = allocatePinName()
     const n = pinCount
@@ -554,18 +583,133 @@ export function initPlaywriterToolbar(): void {
   // Record circle icon (red filled circle)
   const RECORD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="#ef4444"/></svg>`
 
-  // Stop square icon (red filled square)
-  const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2" fill="#ef4444"/></svg>`
+  // ── Sound synthesis (cuelume-inspired, Web Audio API) ───────────────────────
+  // Recipes from https://github.com/Danilaa1/cuelume — synthesized live, no audio files.
+
+  let audioCtx: AudioContext | null = null
+
+  const SOUND_RECIPES: Record<string, { masterGain: number; layers: any[]; shimmer?: any }> = {
+    // Three-note ascending confirmation (copy to clipboard)
+    success: {
+      masterGain: 0.5,
+      layers: [
+        { kind: 'tone', waveform: 'sine', frequency: 880, attack: 0.004, decay: 0.09, peak: 0.06 },
+        { kind: 'tone', waveform: 'sine', frequency: 1108.73, offset: 0.06, attack: 0.004, decay: 0.1, peak: 0.06 },
+        { kind: 'tone', waveform: 'sine', frequency: 1318.51, offset: 0.12, attack: 0.004, decay: 0.18, peak: 0.07 },
+      ],
+      shimmer: { delay: 0.1, feedback: 0.22, wet: 0.16, lowpass: 4500 },
+    },
+    // Short UI tick for toolbar buttons
+    click: {
+      masterGain: 0.38,
+      layers: [
+        { kind: 'tone', waveform: 'sine', frequency: 1400, attack: 0.002, decay: 0.04, peak: 0.05 },
+        { kind: 'noise', filterType: 'highpass', filterFreq: 3000, filterQ: 0.5, attack: 0.001, decay: 0.025, peak: 0.018 },
+      ],
+    },
+    // Rising unresolved lift (recording started)
+    loading: {
+      masterGain: 0.42,
+      layers: [
+        { kind: 'noise', filterType: 'lowpass', filterFreq: 1400, filterQ: 0.6, attack: 0.035, decay: 0.14, peak: 0.035 },
+        { kind: 'tone', waveform: 'sine', frequency: 420, glideTo: 630, glideTime: 0.18, attack: 0.025, decay: 0.18, peak: 0.05 },
+      ],
+      shimmer: { delay: 0.11, feedback: 0.18, wet: 0.12, lowpass: 2800 },
+    },
+  }
+
+  function renderSoundRecipe(ctx: AudioContext, recipe: any): void {
+    const now = ctx.currentTime
+    const output = ctx.createGain()
+    output.gain.value = 4
+    output.connect(ctx.destination)
+    const master = ctx.createGain()
+    master.gain.value = recipe.masterGain
+    master.connect(output)
+
+    if (recipe.shimmer) {
+      const s = recipe.shimmer
+      const dl = ctx.createDelay(1)
+      dl.delayTime.value = s.delay
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = s.lowpass
+      const fb = ctx.createGain()
+      fb.gain.value = s.feedback
+      const wet = ctx.createGain()
+      wet.gain.value = s.wet
+      master.connect(dl)
+      dl.connect(lp).connect(fb).connect(dl)
+      lp.connect(wet).connect(output)
+    }
+
+    for (const l of recipe.layers) {
+      const t = now + (l.offset || 0)
+      const env = ctx.createGain()
+      env.gain.setValueAtTime(0.0001, t)
+      env.gain.exponentialRampToValueAtTime(l.peak, t + l.attack)
+      env.gain.exponentialRampToValueAtTime(0.0001, t + l.attack + l.decay)
+      env.connect(master)
+
+      if (l.kind === 'tone') {
+        const osc = ctx.createOscillator()
+        osc.type = l.waveform
+        osc.frequency.setValueAtTime(l.frequency, t)
+        if (l.glideTo) {
+          osc.frequency.exponentialRampToValueAtTime(l.glideTo, t + (l.glideTime || l.attack + l.decay))
+        }
+        osc.connect(env)
+        osc.start(t)
+        osc.stop(t + l.attack + l.decay + 0.05)
+      } else {
+        const dur = l.attack + l.decay + 0.05
+        const buf = ctx.createBuffer(1, Math.max(1, Math.floor(dur * ctx.sampleRate)), ctx.sampleRate)
+        const d = buf.getChannelData(0)
+        for (let i = 0; i < d.length; i++) d[i] = 2 * Math.random() - 1
+        const src = ctx.createBufferSource()
+        src.buffer = buf
+        const flt = ctx.createBiquadFilter()
+        flt.type = l.filterType
+        flt.frequency.value = l.filterFreq
+        if (l.filterQ) flt.Q.value = l.filterQ
+        src.connect(flt).connect(env)
+        src.start(t)
+        src.stop(t + dur)
+      }
+    }
+  }
+
+  function playSound(name: string): void {
+    try {
+      const recipe = SOUND_RECIPES[name]
+      if (!recipe) return
+      if (!audioCtx) {
+        const Ctor = window.AudioContext || (window as any).webkitAudioContext
+        if (!Ctor) return
+        audioCtx = new Ctor()
+      }
+      const ctx = audioCtx
+      if (ctx.state === 'running') {
+        renderSoundRecipe(ctx, recipe)
+      } else {
+        void ctx.resume().then(() => {
+          if (ctx.state === 'running') renderSoundRecipe(ctx, recipe)
+        }).catch(() => {})
+      }
+    } catch {}
+  }
 
   // ── Build toolbar buttons ──────────────────────────────────────────────────
 
   // Pin element button
   pinBtn = document.createElement('button')
   pinBtn.className = 'btn'
-  pinBtn.setAttribute('title', 'Pin element \u2014 click any element on the page to copy a playwriter inspection command to clipboard')
+  pinBtn.setAttribute('data-tooltip', 'Select and copy element as prompt')
+  pinBtn.setAttribute('aria-label', 'Select and copy element as prompt')
   pinBtn.innerHTML = PIN_SVG
   pinBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation()
+    playSound('click')
     setPinMode(!pinModeActive)
   })
 
@@ -578,12 +722,12 @@ export function initPlaywriterToolbar(): void {
 
   function updateRecordBtn(): void {
     if (isRecording) {
-      recordBtn.innerHTML = STOP_SVG + ' <span>Recording skill\u2026</span>'
-      recordBtn.setAttribute('title', 'Stop recording \u2014 copies a prompt for your agent to analyze the recorded workflow and create a skill')
+      recordBtn.innerHTML = '<span>Recording skill\u2026</span>'
+      recordBtn.setAttribute('data-tooltip', 'Stop and copy analysis prompt')
       recordBtn.classList.add('active')
     } else {
-      recordBtn.innerHTML = RECORD_SVG + ' <span>Record</span>'
-      recordBtn.setAttribute('title', 'Start recording your actions as a skill \u2014 clicks, navigation, and form inputs are captured for an agent to replay')
+      recordBtn.innerHTML = RECORD_SVG + ' <span>Record Skill</span>'
+      recordBtn.setAttribute('data-tooltip', 'Capture actions as a reusable skill')
       recordBtn.classList.remove('active')
     }
   }
@@ -591,13 +735,17 @@ export function initPlaywriterToolbar(): void {
 
   recordBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation()
+    playSound('click')
     if (isRecording) {
-      // Stop recording and copy analysis prompt to clipboard
       window.__playwriterToolbarStopRecording?.()
-    } else {
-      // Start recording via relay
-      window.__playwriterToolbarStartRecording?.()
+      return
     }
+    if (!window.__playwriterToolbarStartRecording) {
+      showToast('Relay not connected')
+      return
+    }
+    playSound('loading')
+    window.__playwriterToolbarStartRecording()
   })
 
   const sep2 = document.createElement('div')
@@ -606,10 +754,12 @@ export function initPlaywriterToolbar(): void {
   // Close button
   const closeBtn = document.createElement('button')
   closeBtn.className = 'btn'
-  closeBtn.setAttribute('title', 'Hide toolbar')
+  closeBtn.setAttribute('data-tooltip', 'Hide toolbar')
+  closeBtn.setAttribute('aria-label', 'Hide toolbar')
   closeBtn.innerHTML = CLOSE_SVG
   closeBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation()
+    playSound('click')
     setPinMode(false)
     host.style.display = 'none'
   })
@@ -617,7 +767,8 @@ export function initPlaywriterToolbar(): void {
   // Drag handle
   const dragHandle = document.createElement('div')
   dragHandle.className = 'drag-handle'
-  dragHandle.setAttribute('title', 'Drag to reposition')
+  dragHandle.setAttribute('data-tooltip', 'Drag to move')
+  dragHandle.setAttribute('aria-label', 'Drag to move')
   dragHandle.innerHTML = DRAG_SVG
 
   // ── Drag behavior ─────────────────────────────────────────────────────────
@@ -682,7 +833,15 @@ export function initPlaywriterToolbar(): void {
   // Attach host to the document (appended to <html> so it survives body rewrites)
   document.documentElement.appendChild(host)
 
-  // ── Recording state callback (called by background.ts via executeScript) ───
+  // ── Globals exposed for background.ts to call via executeScript ─────────────
+
+  window.__playwriterToolbarShowToast = function (msg: string): void {
+    showToast(msg)
+  }
+
+  window.__playwriterToolbarPlaySound = function (name: string): void {
+    playSound(name)
+  }
 
   window.__playwriterToolbarSetRecording = function (recording: boolean): void {
     if (isRecording === recording) return
@@ -702,6 +861,8 @@ export function initPlaywriterToolbar(): void {
     delete window.__playwriterToolbarSetRecording
     delete window.__playwriterToolbarStopRecording
     delete window.__playwriterToolbarStartRecording
+    delete window.__playwriterToolbarShowToast
+    delete window.__playwriterToolbarPlaySound
     delete window.__playwriterPinCount
   }
 }
