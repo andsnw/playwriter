@@ -72,6 +72,20 @@ export PLAYWRITER_TOKEN=MY_SECRET
 playwriter session new
 ```
 
+## Recorder route CORS
+
+The `/recorder/start` and `/recorder/stop` endpoints accept **cross-origin requests from any origin**. This lets the extension's toolbar button work on any website without CORS failures.
+
+These routes are safe to expose because:
+
+- **No sensitive data in responses.** Start returns `{ recordingId, sessionId }`, stop returns `{ recordingId }`. No page content, credentials, or user data is exposed.
+- **Recorded events stay local.** Event data is stored on disk and served only via `/recorder/events/:id`, which does **not** allow cross-origin access.
+- **Recording is visible.** The toolbar shows "Recording skill..." so you always know when recording is active.
+- **Content-Type enforced.** POST requests must use `application/json`, which forces a CORS preflight. Simple form submissions cannot trigger recording.
+- **Token auth still applies.** In remote mode, the auth token is required even for recorder routes.
+
+All other relay endpoints (code execution, CDP forwarding, event retrieval) remain locked to the extension origin or localhost-only access. A malicious page can at most start or stop a recording; it cannot read recorded data or execute code.
+
 ## Cookie safety
 
 **Never use `Network.clearBrowserCookies`** via CDP. It's a profile-wide destructive operation that wipes ALL cookies across every domain in the user's Chrome profile; Gmail, GitHub, and every authenticated session.

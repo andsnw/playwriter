@@ -915,13 +915,27 @@ export async function startPlayWriterCDPRelayServer({
     return c.json({ error: err.message }, 500)
   })
 
-  // CORS middleware for HTTP endpoints - only allows our specific extension IDs.
-  // This prevents other extensions from reading responses via fetch/XHR.
+  // CORS middleware for HTTP endpoints.
+  // Most routes only allow our specific extension IDs, preventing other
+  // extensions from reading responses via fetch/XHR.
+  // /recorder/start and /recorder/stop allow any origin (see security note below).
   // WebSocket connections have their own separate origin validation.
   app.use(
     '*',
     cors({
-      origin: (origin) => {
+      origin: (origin, c) => {
+        // CORS for recorder start/stop: allow any origin.
+        // Security: these routes only toggle recording state and return
+        // non-sensitive metadata (recordingId, sessionId). Recorded event
+        // data is NOT served here — it lives behind /recorder/events/:id
+        // which stays extension-only. A malicious page can at most start or
+        // stop a recording; it cannot read recorded data or execute code.
+        // Content-Type: application/json is still required (forces preflight),
+        // and token auth still applies in remote mode.
+        const path = c.req.path
+        if (path === '/recorder/start' || path === '/recorder/stop') {
+          return origin || '*'
+        }
         if (!origin.startsWith('chrome-extension://')) {
           return null
         }
@@ -1976,8 +1990,11 @@ export async function startPlayWriterCDPRelayServer({
     // Block cross-origin browser requests via Sec-Fetch-Site header.
     // Browsers always set this forbidden header; it cannot be spoofed.
     // Non-browser clients (Node.js, curl, MCP) don't send it.
+    // Exception: /recorder/start and /recorder/stop allow cross-origin because
+    // they have CORS enabled and only toggle recording state (no data leakage).
     const secFetchSite = c.req.header('sec-fetch-site')
-    if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {
+    const isRecorderToggle = c.req.path === '/recorder/start' || c.req.path === '/recorder/stop'
+    if (!isRecorderToggle && secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {
       logger?.log(pc.red(`Rejecting ${c.req.path}: cross-origin browser request (Sec-Fetch-Site: ${secFetchSite})`))
       return c.text('Forbidden - Cross-origin requests not allowed', 403)
     }

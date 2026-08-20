@@ -276,6 +276,46 @@ describe('Security Tests', () => {
     expect(recordingWithToken.status).toBe(200)
   })
 
+  it('should allow cross-origin requests to /recorder/start and /recorder/stop', async () => {
+    const logger = createFileLogger()
+    server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, logger })
+
+    // /recorder/start allows cross-site Sec-Fetch-Site (unlike /cli/*)
+    const recorderStart = await httpRequest({
+      path: '/recorder/start',
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
+    })
+    // 500 = passed middleware (no session running, but that's OK)
+    expect(recorderStart.status).not.toBe(403)
+
+    // /recorder/stop also allows cross-site
+    const recorderStop = await httpRequest({
+      path: '/recorder/stop',
+      headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
+    })
+    expect(recorderStop.status).not.toBe(403)
+
+    // /recorder/status should still be blocked
+    const recorderStatus = await httpRequest({
+      path: '/recorder/status',
+      method: 'GET',
+      headers: { 'Sec-Fetch-Site': 'cross-site' },
+    })
+    expect(recorderStatus.status).toBe(403)
+  })
+
+  it('should still enforce Content-Type on /recorder/* cross-origin requests', async () => {
+    const logger = createFileLogger()
+    server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, logger })
+
+    // text/plain POST to /recorder/start should still be rejected (415)
+    const textPlain = await httpRequest({
+      path: '/recorder/start',
+      headers: { 'Content-Type': 'text/plain', 'Sec-Fetch-Site': 'cross-site' },
+    })
+    expect(textPlain.status).toBe(415)
+  })
+
   it('should not require token on /cli/* when no token is configured', async () => {
     const logger = createFileLogger()
     server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, logger })
