@@ -5,8 +5,9 @@ navigations, and mutating xhr/fetch are written to a JSON event file. CDP
 screencast writes a jpeg into a frames folder whenever the page changes. User
 clicks flash a short ripple in those frames. Recording auto-stops after 20 minutes.
 
-The end goal: a **SKILL.md** of markdown instructions that replays the flow with
-**playwriter** commands. Never drive the browser with raw Playwright or `npx playwright`.
+The end goal: a **skill** (`SKILL.md` plus an importable utils script) that
+replays the flow with **playwriter** commands. Never drive the browser with raw
+Playwright or `npx playwright`.
 
 ## First: read how Playwriter works
 
@@ -107,13 +108,17 @@ Guess sensible defaults from the events (name, location, use case, parameters)
 and **write the skill**. Then tell the user what you assumed. Demo values the
 user typed should almost always be parameters, not hardcoded strings.
 
-Create **one file**: `SKILL.md` in the skill directory
-(`~/.config/opencode/skills/<name>/` for a personal skill, or `skills/<name>/`
-in the current repo).
+Use the [Agent Skills](https://agentskills.io) default locations, not a
+client-specific folder such as `~/.config/opencode/skills/`:
 
-Frontmatter with `name` and `description` (when to load the skill). The body
-explains the flow the user performed, as **markdown instructions with example
-playwriter commands** built from the recorded events:
+- personal (all projects): `~/.agents/skills/<name>/`
+- project-local: `.agents/skills/<name>/` in the current repo
+
+Write **`SKILL.md`** and a **`utils.js`** (or `utils.ts`) in that directory.
+
+`SKILL.md` frontmatter has `name` and `description` (when to load the skill).
+The body explains the flow as **markdown instructions with example playwriter
+commands** built from the recorded events:
 
 ````markdown
 ---
@@ -146,7 +151,17 @@ playwriter -s 1 -e 'await page.getByRole("textbox", { name: "Website URL" }).fil
 playwriter -s 1 -e 'await page.getByRole("button", { name: "Submit" }).click()'
 playwriter -s 1 -e 'await page.getByText("Thanks! Your product is under review.").waitFor()'
 ```
+
+Or import the utils script (preferred for replay; fewer tokens):
+
+```bash
+playwriter -s 1 -e 'const { submitProduct } = await import("/abs/path/.agents/skills/submit-to-directory/utils.js"); await submitProduct({ page, name, url })'
+```
 ````
+
+`utils.js` is an importable ESM script. Export functions that accept `{ page }`
+plus parameters. Keep them small (one per phase, plus one top-level that runs
+the whole flow). The playwriter sandbox can import local files.
 
 Rules:
 
@@ -168,15 +183,15 @@ automation when unsure, and mention the API alternative in the skill.
 
 ## Validate
 
-The skill is not done until the example playwriter commands succeed end-to-end
-with test parameters. If they fail, snapshot the live page, fix the locator or
-wait, and run again.
+The skill is not done until replay succeeds end-to-end with test parameters.
+Prefer replaying the utils script. If that fails, snapshot the live page, fix
+the locator or wait, and run again.
 
 ## Updating an existing skill
 
 If a similar skill already exists (check the location first), update it instead
-of creating a new one: read the current SKILL.md, re-record or compare locators,
-fix the root cause, keep working parts, re-validate.
+of creating a new one: read the current SKILL.md and utils file, re-record or
+compare locators, fix the root cause, keep working parts, re-validate.
 
 ## Checklist
 
@@ -185,5 +200,5 @@ fix the root cause, keep working parts, re-validate.
 - Demo-typed values are parameters
 - Waits reflect real timing (user remarks + event gaps)
 - Secrets are never hardcoded
-- Replay uses playwriter commands, not a utils script
+- Replay uses playwriter commands (inline `-e` or an imported utils script)
 - The flow was validated end-to-end at least once
