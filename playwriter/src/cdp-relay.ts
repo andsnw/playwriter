@@ -1332,7 +1332,7 @@ export async function startPlayWriterCDPRelayServer({
               }
             }
 
-            if (method === 'Target.setDiscoverTargets' && (params as Protocol.Target.SetDiscoverTargetsRequest)?.discover) {
+            if (method === 'Target.setDiscoverTargets' && params?.discover) {
               const freshExt2 = store.getState().extensions.get(extensionConn.id)
               const freshTargets2 = freshExt2?.connectedTargets || new Map()
               for (const target of freshTargets2.values()) {
@@ -1369,7 +1369,7 @@ export async function startPlayWriterCDPRelayServer({
 
             if (method === 'Target.attachToTarget') {
               const attachResponse = result as Protocol.Target.AttachToTargetResponse | undefined
-              const attachRequestParams = params as Protocol.Target.AttachToTargetRequest | undefined
+              const attachRequestParams = params
               if (attachResponse?.sessionId) {
                 const freshExt3 = store.getState().extensions.get(extensionConn.id)
                 const freshTargets3 = freshExt3?.connectedTargets || new Map()
@@ -1588,22 +1588,22 @@ export async function startPlayWriterCDPRelayServer({
             logFunc?.(prefix, ...args)
           } else if (message.method === 'recordingData') {
             const streamRelay = streamRelays.get(connectionId)
-            if (!streamRelay?.handleRecordingData(message as RecordingDataMessage)) {
+            if (!streamRelay?.handleRecordingData(message)) {
               const relay = getRecordingRelay(connectionId)
               if (relay) {
-                relay.handleRecordingData(message as RecordingDataMessage)
+                relay.handleRecordingData(message)
               }
             }
           } else if (message.method === 'recordingCancelled') {
             const streamRelay = streamRelays.get(connectionId)
-            if (!streamRelay?.handleRecordingCancelled(message as RecordingCancelledMessage)) {
+            if (!streamRelay?.handleRecordingCancelled(message)) {
               const relay = getRecordingRelay(connectionId)
               if (relay) {
-                relay.handleRecordingCancelled(message as RecordingCancelledMessage)
+                relay.handleRecordingCancelled(message)
               }
             }
           } else {
-            const extensionEvent = message as ExtensionEventMessage
+            const extensionEvent = message
 
             if (extensionEvent.method !== 'forwardCDPEvent') {
               return
@@ -1638,7 +1638,7 @@ export async function startPlayWriterCDPRelayServer({
             maybeEmitBrowserDownloadCompatEvent({ method, params, extensionId: connectionId })
 
             if (method === 'Target.attachedToTarget') {
-              const targetParams = params as Protocol.Target.AttachedToTargetEvent
+              const targetParams = params!
               const incomingSessionId = sessionId
               const iframeParentFrameId = targetParams.targetInfo.parentFrameId
               // Read current extension state for iframe parent lookup
@@ -1725,7 +1725,7 @@ export async function startPlayWriterCDPRelayServer({
                 })
               }
             } else if (method === 'Target.detachedFromTarget') {
-              const detachParams = params as Protocol.Target.DetachedFromTargetEvent
+              const detachParams = params!
               store.setState((s) =>
                 relayState.removeTarget(s, { extensionId: connectionId, sessionId: detachParams.sessionId }),
               )
@@ -1740,7 +1740,7 @@ export async function startPlayWriterCDPRelayServer({
                 extensionId: connectionId,
               })
             } else if (method === 'Target.targetCrashed') {
-              const crashParams = params as Protocol.Target.TargetCrashedEvent
+              const crashParams = params!
               store.setState((s) =>
                 relayState.removeTargetByCrash(s, { extensionId: connectionId, targetId: crashParams.targetId }),
               )
@@ -1755,7 +1755,7 @@ export async function startPlayWriterCDPRelayServer({
                 extensionId: connectionId,
               })
             } else if (method === 'Target.targetInfoChanged') {
-              const infoParams = params as Protocol.Target.TargetInfoChangedEvent
+              const infoParams = params!
               store.setState((s) =>
                 relayState.updateTargetInfo(s, { extensionId: connectionId, targetInfo: infoParams.targetInfo }),
               )
@@ -1769,7 +1769,7 @@ export async function startPlayWriterCDPRelayServer({
                 extensionId: connectionId,
               })
             } else if (method === 'Page.frameAttached') {
-              const frameParams = params as Protocol.Page.FrameAttachedEvent
+              const frameParams = params!
               if (sessionId) {
                 store.setState((s) =>
                   relayState.addFrameId(s, { extensionId: connectionId, sessionId, frameId: frameParams.frameId }),
@@ -1786,7 +1786,7 @@ export async function startPlayWriterCDPRelayServer({
                 extensionId: connectionId,
               })
             } else if (method === 'Page.frameDetached') {
-              const frameParams = params as Protocol.Page.FrameDetachedEvent
+              const frameParams = params!
               store.setState((s) =>
                 relayState.removeFrameId(s, { extensionId: connectionId, frameId: frameParams.frameId }),
               )
@@ -1801,7 +1801,7 @@ export async function startPlayWriterCDPRelayServer({
                 extensionId: connectionId,
               })
             } else if (method === 'Page.frameNavigated') {
-              const frameParams = params as Protocol.Page.FrameNavigatedEvent
+              const frameParams = params!
               if (sessionId) {
                 store.setState((s) =>
                   relayState.addFrameId(s, { extensionId: connectionId, sessionId, frameId: frameParams.frame.id }),
@@ -1832,7 +1832,7 @@ export async function startPlayWriterCDPRelayServer({
                 extensionId: connectionId,
               })
             } else if (method === 'Page.navigatedWithinDocument') {
-              const navParams = params as Protocol.Page.NavigatedWithinDocumentEvent
+              const navParams = params!
               if (sessionId) {
                 store.setState((s) =>
                   relayState.updateTargetUrl(s, { extensionId: connectionId, sessionId, url: navParams.url }),
@@ -2042,7 +2042,7 @@ export async function startPlayWriterCDPRelayServer({
 
   app.post('/cli/execute', async (c) => {
     try {
-      const body = (await c.req.json()) as { sessionId: string | number; code: string; timeout?: number }
+      const body: { sessionId: string | number; code: string; timeout?: number } = await c.req.json()
       const sessionId = normalizeSessionId(body.sessionId)
       const { code, timeout = DEFAULT_EXEC_TIMEOUT } = body
 
@@ -2087,7 +2087,7 @@ export async function startPlayWriterCDPRelayServer({
 
   app.post('/cli/reset', async (c) => {
     try {
-      const body = (await c.req.json()) as { sessionId: string | number }
+      const body: { sessionId: string | number } = await c.req.json()
       const sessionId = normalizeSessionId(body.sessionId)
 
       if (!sessionId) {
@@ -2276,7 +2276,7 @@ export async function startPlayWriterCDPRelayServer({
 
   app.post('/cli/session/delete', async (c) => {
     try {
-      const body = (await c.req.json()) as { sessionId: string | number }
+      const body: { sessionId: string | number } = await c.req.json()
       const sessionId = normalizeSessionId(body.sessionId)
 
       if (!sessionId) {
@@ -2322,14 +2322,7 @@ export async function startPlayWriterCDPRelayServer({
   // ============================================================================
 
   app.post('/recording/start', async (c) => {
-    const body = (await c.req.json()) as {
-      outputPath?: string
-      sessionId?: string | number
-      frameRate?: number
-      audio?: boolean
-      videoBitsPerSecond?: number
-      audioBitsPerSecond?: number
-    }
+    const body: StartRecordingBody & { sessionId?: string | number } = await c.req.json()
     const sessionId = normalizeSessionId(body.sessionId)
     const { sessionId: _sessionId, ...recordingOptions } = body
     const { extensionId, sessionId: resolvedSessionId } = await resolveRecordingRoute({ sessionId })
@@ -2346,7 +2339,7 @@ export async function startPlayWriterCDPRelayServer({
   })
 
   app.post('/recording/stop', async (c) => {
-    const body = (await c.req.json()) as { sessionId?: string | number }
+    const body: { sessionId?: string | number } = await c.req.json()
     const sessionId = normalizeSessionId(body.sessionId)
     const { extensionId, sessionId: resolvedSessionId } = await resolveRecordingRoute({ sessionId })
     const relay = getRecordingRelay(extensionId)
@@ -2372,7 +2365,7 @@ export async function startPlayWriterCDPRelayServer({
   })
 
   app.post('/recording/cancel', async (c) => {
-    const body = (await c.req.json()) as { sessionId?: string | number }
+    const body: { sessionId?: string | number } = await c.req.json()
     const sessionId = normalizeSessionId(body.sessionId)
     const { extensionId, sessionId: resolvedSessionId } = await resolveRecordingRoute({ sessionId })
     const relay = getRecordingRelay(extensionId)
@@ -2527,7 +2520,7 @@ export async function startPlayWriterCDPRelayServer({
   // ============================================================================
 
   app.post('/stream/start', async (c) => {
-    const body = (await c.req.json()) as StartStreamParams & { sessionId?: string | number }
+    const body: StartStreamParams & { sessionId?: string | number } = await c.req.json()
     const sessionId = normalizeSessionId(body.sessionId)
     const { sessionId: _sessionId, ...streamOptions } = body
     const { extensionId, sessionId: resolvedSessionId } = await resolveRecordingRoute({ sessionId })
@@ -2544,7 +2537,7 @@ export async function startPlayWriterCDPRelayServer({
   })
 
   app.post('/stream/stop', async (c) => {
-    const body = (await c.req.json()) as { sessionId?: string | number }
+    const body: { sessionId?: string | number } = await c.req.json()
     const sessionId = normalizeSessionId(body.sessionId)
     const { extensionId, sessionId: resolvedSessionId } = await resolveRecordingRoute({ sessionId })
     const relay = getStreamRelay(extensionId)

@@ -28,6 +28,10 @@ import {
   cleanupRecordingForTab,
 } from './recording'
 
+function isTruthy<T>(value: T): value is NonNullable<T> {
+  return Boolean(value)
+}
+
 const RELAY_HOST = '127.0.0.1'
 const RELAY_PORT = Number(process.env.PLAYWRITER_PORT) || 19988
 
@@ -913,7 +917,7 @@ async function syncTabGroup(): Promise<void> {
     if (connectedTabIds.length === 0) {
       for (const group of existingGroups) {
         const tabsInGroup = await chrome.tabs.query({ groupId: group.id })
-        const tabIdsToUngroup = tabsInGroup.map((t) => t.id).filter((id): id is number => id !== undefined)
+        const tabIdsToUngroup = tabsInGroup.map((t) => t.id).filter(isTruthy)
         if (tabIdsToUngroup.length > 0) {
           await chrome.tabs.ungroup(tabIdsToUngroup)
         }
@@ -929,7 +933,7 @@ async function syncTabGroup(): Promise<void> {
       groupId = keep.id
       for (const group of duplicates) {
         const tabsInDupe = await chrome.tabs.query({ groupId: group.id })
-        const tabIdsToUngroup = tabsInDupe.map((t) => t.id).filter((id): id is number => id !== undefined)
+        const tabIdsToUngroup = tabsInDupe.map((t) => t.id).filter(isTruthy)
         if (tabIdsToUngroup.length > 0) {
           await chrome.tabs.ungroup(tabIdsToUngroup)
         }
@@ -1071,7 +1075,7 @@ async function handleCommand(msg: ExtensionCommandMessage): Promise<any> {
   // Root-level Target.setAutoAttach must apply to all connected tabs since
   // CDP auto-attach is per-debugger-session. Without this, OOPIF targets never attach.
   if (msg.params.method === 'Target.setAutoAttach' && !msg.params.sessionId) {
-    const params = msg.params.params as Protocol.Target.SetAutoAttachRequest | undefined
+    const params = msg.params.params
     if (!params) {
       return {}
     }
@@ -1523,7 +1527,7 @@ function detachTab(tabId: number, shouldDetachDebugger: boolean): void {
   }
 
   // Clean up any active recording for this tab
-  cleanupRecordingForTab(tabId)
+  void cleanupRecordingForTab(tabId)
 
   // Destroy the in-page toolbar (best-effort: tab may already be closing or navigating)
   void chrome.scripting
@@ -1596,10 +1600,10 @@ function injectRecorderCallbacks(tabId: number): void {
         window.addEventListener('message', (event: MessageEvent) => {
           if (event.source !== window) return
           if (event.data?.__playwriter === 'recorder_start') {
-            chrome.runtime.sendMessage({ action: 'actionRecorderStart' })
+            void chrome.runtime.sendMessage({ action: 'actionRecorderStart' })
           }
           if (event.data?.__playwriter === 'recorder_stop') {
-            chrome.runtime.sendMessage({ action: 'actionRecorderStop' })
+            void chrome.runtime.sendMessage({ action: 'actionRecorderStop' })
           }
         })
       },
@@ -1884,7 +1888,7 @@ async function updateIcons(): Promise<void> {
 
   const allTabs = await chrome.tabs.query({})
   const tabUrlMap = new Map(allTabs.map((tab) => [tab.id, tab.url]))
-  const allTabIds = [undefined, ...allTabs.map((tab) => tab.id).filter((id): id is number => id !== undefined)]
+  const allTabIds = [undefined, ...allTabs.map((tab) => tab.id).filter(isTruthy)]
 
   for (const tabId of allTabIds) {
     const tabInfo = tabId !== undefined ? tabs.get(tabId) : undefined
@@ -1975,8 +1979,8 @@ async function onActionClicked(tab: chrome.tabs.Tab): Promise<void> {
   }
 }
 
-resetDebugger()
-connectionManager.maintainLoop()
+void resetDebugger()
+void connectionManager.maintainLoop()
 
 chrome.contextMenus
   .remove('playwriter-pin-element')
@@ -2005,8 +2009,8 @@ chrome.contextMenus
 function updateContextMenuVisibility(): void {
   const { currentTabId, tabs } = store.getState()
   const isConnected = currentTabId !== undefined && tabs.get(currentTabId)?.state === 'connected'
-  chrome.contextMenus?.update('playwriter-pin-element', { visible: isConnected })
-  chrome.contextMenus?.update('playwriter-copy-react-source', { visible: isConnected })
+  void chrome.contextMenus?.update('playwriter-pin-element', { visible: isConnected })
+  void chrome.contextMenus?.update('playwriter-copy-react-source', { visible: isConnected })
 }
 
 function buildPinnedElementInspectionCode(options: { pinName: string; url: string }): string {
@@ -2164,11 +2168,7 @@ chrome.windows.onCreated.addListener(async (popupWindow) => {
       if (popupTabs.length > 0) break
       await sleep(20)
     }
-    const tabIds = popupTabs
-      .map((t) => t.id)
-      .filter((id): id is number => {
-        return id !== undefined
-      })
+    const tabIds = popupTabs.map((t) => t.id).filter(isTruthy)
     if (tabIds.length === 0) {
       logger.debug(`Popup window ${popupWindow.id} has no tabs after retry, skipping`)
       return

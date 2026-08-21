@@ -78,7 +78,7 @@ async function sendLogToRelayServer(level: string, ...args: any[]) {
  */
 function mcpLog(...args: any[]) {
   console.error(...args)
-  sendLogToRelayServer('log', ...args)
+  void sendLogToRelayServer('log', ...args)
 }
 
 /** MCP-specific logger for executor */
@@ -86,7 +86,7 @@ const mcpLogger = {
   log: (...args: any[]) => mcpLog(...args),
   error: (...args: any[]) => {
     console.error(...args)
-    sendLogToRelayServer('error', ...args)
+    void sendLogToRelayServer('error', ...args)
   },
 }
 
@@ -296,7 +296,7 @@ server.tool(
 
       console.error('Error in execute tool:', errorStack)
       if (!isTimeoutError) {
-        sendLogToRelayServer('error', 'Error in execute tool:', errorStack)
+        void sendLogToRelayServer('error', 'Error in execute tool:', errorStack)
       }
 
       const resetHint = isTimeoutError

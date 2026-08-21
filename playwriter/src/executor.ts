@@ -542,7 +542,7 @@ export class PlaywrightExecutor {
 
     // Apply to future pages
     context.on('page', (page) => {
-      applyToPage(page)
+      void applyToPage(page)
     })
 
     this.logger.log('Proxy bandwidth acceleration enabled: blocking raster images')
