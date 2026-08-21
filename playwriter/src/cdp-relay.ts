@@ -1732,6 +1732,7 @@ export async function startPlayWriterCDPRelayServer({
 
               sendToPlaywright({
                 message: {
+                  sessionId,
                   method: 'Target.detachedFromTarget',
                   params: detachParams,
                 } as CDPEventBase,
