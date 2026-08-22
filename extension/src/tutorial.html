@@ -11,14 +11,9 @@
         --color-text: #262626;
         --color-heading: #171717;
         --color-border: #d4d4d4;
-        --color-code-bg: transparent;
         --color-link: #0969da;
         --color-link-hover: #0550ae;
-        --color-success: #16a34a;
-        --color-muted: #737373;
-        --color-banner-bg: #f6f8fa;
         --max-width: 640px;
-        --spacing: 1.5rem;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -27,12 +22,8 @@
           --color-text: #e5e5e5;
           --color-heading: #fafafa;
           --color-border: #404040;
-          --color-code-bg: transparent;
           --color-link: #4493f8;
           --color-link-hover: #539bf5;
-          --color-success: #22c55e;
-          --color-muted: #a3a3a3;
-          --color-banner-bg: #161616;
         }
       }
 
@@ -60,18 +51,9 @@
         font-size: 1.75rem;
         font-weight: 600;
         color: var(--color-heading);
-        margin-top: 2rem;
         margin-bottom: 1rem;
         padding-bottom: 0.5rem;
         border-bottom: 1px solid var(--color-border);
-      }
-
-      h3 {
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: var(--color-heading);
-        margin-top: 1.5rem;
-        margin-bottom: 0.75rem;
       }
 
       p {
@@ -110,82 +92,9 @@
         white-space: pre;
       }
 
-      ol,
-      ul {
-        margin-bottom: 1rem;
-        padding-left: 2rem;
-      }
-
-      li {
-        margin-bottom: 0.5rem;
-        opacity: 0.8;
-      }
-
       strong {
         font-weight: 600;
         color: var(--color-heading);
-      }
-
-      .step-number {
-        color: var(--color-link);
-        font-weight: 700;
-        font-size: 1.125rem;
-        margin-right: 0.75rem;
-        flex-shrink: 0;
-        line-height: 1.6;
-      }
-
-      .step {
-        display: flex;
-        align-items: flex-start;
-        margin-bottom: 1.5rem;
-      }
-
-      .step-content {
-        flex: 1;
-        min-width: 0;
-      }
-
-      .banner {
-        background: var(--color-banner-bg);
-        border: 1px solid var(--color-border);
-        border-left: 4px solid var(--color-link);
-        border-radius: 6px;
-        padding: 1rem 1.25rem;
-        margin-bottom: 2rem;
-      }
-
-      .banner.ready {
-        border-left-color: var(--color-success);
-      }
-
-      .banner p {
-        margin-bottom: 0.5rem;
-      }
-
-      .banner p:last-child {
-        margin-bottom: 0;
-      }
-
-      .status {
-        font-size: 0.875rem;
-        color: var(--color-muted);
-        opacity: 1;
-        margin-top: 0.75rem;
-      }
-
-      .status[data-state='ready'] {
-        color: var(--color-success);
-        font-weight: 600;
-      }
-
-      footer {
-        margin-top: 3rem;
-        padding-top: 2rem;
-        border-top: 1px solid var(--color-border);
-        text-align: center;
-        color: var(--color-muted);
-        font-size: 0.875rem;
       }
 
       code[class*='language-'],
@@ -193,56 +102,16 @@
         color: #8959a8;
         text-shadow: none;
       }
-      .token.comment,
-      .token.block-comment,
-      .token.prolog,
-      .token.doctype,
-      .token.cdata {
+      .token.comment {
         color: #8e908c;
       }
-      .token.punctuation {
-        color: #8959a8;
-      }
-      .token.tag,
-      .token.attr-name,
-      .token.namespace,
-      .token.deleted {
-        color: #c82829;
-      }
-      .token.function-name {
-        color: #4271ae;
-      }
-      .token.boolean,
-      .token.number,
       .token.function {
         color: #f5871f;
       }
-      .token.property,
-      .token.class-name,
-      .token.constant,
-      .token.symbol {
-        color: #eab700;
-      }
-      .token.selector,
-      .token.important,
-      .token.atrule,
-      .token.keyword,
-      .token.builtin {
+      .token.keyword {
         color: #8959a8;
       }
-      .token.string,
-      .token.char,
-      .token.attr-value,
-      .token.regex,
-      .token.variable {
-        color: #718c00;
-      }
-      .token.operator,
-      .token.entity,
-      .token.url {
-        color: #3e999f;
-      }
-      .token.inserted {
+      .token.string {
         color: #718c00;
       }
 
@@ -251,56 +120,16 @@
         pre[class*='language-'] {
           color: #b294bb;
         }
-        .token.comment,
-        .token.block-comment,
-        .token.prolog,
-        .token.doctype,
-        .token.cdata {
+        .token.comment {
           color: #969896;
         }
-        .token.punctuation {
-          color: #b294bb;
-        }
-        .token.tag,
-        .token.attr-name,
-        .token.namespace,
-        .token.deleted {
-          color: #cc6666;
-        }
-        .token.function-name {
-          color: #81a2be;
-        }
-        .token.boolean,
-        .token.number,
         .token.function {
           color: #de935f;
         }
-        .token.property,
-        .token.class-name,
-        .token.constant,
-        .token.symbol {
-          color: #f0c674;
-        }
-        .token.selector,
-        .token.important,
-        .token.atrule,
-        .token.keyword,
-        .token.builtin {
+        .token.keyword {
           color: #b294bb;
         }
-        .token.string,
-        .token.char,
-        .token.attr-value,
-        .token.regex,
-        .token.variable {
-          color: #b5bd68;
-        }
-        .token.operator,
-        .token.entity,
-        .token.url {
-          color: #8abeb7;
-        }
-        .token.inserted {
+        .token.string {
           color: #b5bd68;
         }
       }
@@ -308,150 +137,22 @@
   </head>
   <body>
     <main>
-      <section>
-        <div class="banner" id="why-banner">
-          <p>
-            <strong>Why this page opened.</strong> You clicked the Playwriter icon. The icon cannot attach a tab until
-            the <strong>local daemon</strong> is running.
-          </p>
-          <p>
-            The daemon starts when an <strong>agent</strong> (or you) runs the first <code>playwriter</code> command on
-            this machine. The extension alone does nothing.
-          </p>
-          <p class="status" id="daemon-status" data-state="checking">Checking for the daemon...</p>
-        </div>
+      <h2>The daemon is not running</h2>
 
-        <h2>The missing step</h2>
+      <p>
+        You clicked the Playwriter icon. It cannot turn <strong>green</strong> until a
+        <code>playwriter</code> command runs on this machine. That first command starts the daemon.
+      </p>
 
-        <p>
-          Playwriter is two parts. This Chrome extension is only the bridge. A local daemon must be listening before the
-          icon can turn <strong>green</strong>.
-        </p>
+      <pre><code class="language-bash">npm i -g playwriter
+npx -y skills add https://playwriter.dev
 
-        <pre><code>Agent / you                         This computer
------------                         -------------
-playwriter session new  ----------► daemon starts
-playwriter -s 1 -e "..."  --------► daemon talks to this extension
-click icon on a tab     ----------► that tab becomes controllable</code></pre>
-      </section>
+playwriter session new
+playwriter -s 1 -e "const p = await context.newPage(); await p.goto('https://example.com')"</code></pre>
 
-      <section>
-        <h2>What to do now</h2>
-
-        <div class="step">
-          <span class="step-number">1</span>
-          <div class="step-content">
-            <strong>Install the CLI once</strong>
-            <pre><code class="language-bash">npm i -g playwriter
-# or without installing:
-npx playwriter@latest session new</code></pre>
-          </div>
-        </div>
-
-        <div class="step">
-          <span class="step-number">2</span>
-          <div class="step-content">
-            <strong>Teach your coding agent once</strong>
-            <p>This installs the Playwriter skill so the agent knows which commands to run:</p>
-            <pre><code class="language-bash">npx -y skills add remorses/playwriter</code></pre>
-          </div>
-        </div>
-
-        <div class="step">
-          <span class="step-number">3</span>
-          <div class="step-content">
-            <strong>Ask the agent to use your browser</strong>
-            <p>
-              You do not start the daemon yourself. Ask the agent to control Chrome. The first
-              <code>playwriter</code> command starts it.
-            </p>
-            <p>Example prompt:</p>
-            <pre><code>Use playwriter to open https://example.com and tell me the page title</code></pre>
-          </div>
-        </div>
-
-        <div class="step">
-          <span class="step-number">4</span>
-          <div class="step-content">
-            <strong>Click the icon again on a website tab</strong>
-            <p>
-              After the daemon is running, go to a normal website (not <code>chrome://</code> and not the Chrome Web
-              Store). Click the Playwriter icon. It turns <strong>green</strong>. Only green tabs are visible to the
-              agent.
-            </p>
-            <p>
-              If the previous tab shows an orange <strong>...</strong> badge, it is already waiting. It will turn green
-              by itself when the daemon starts.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <h2>Start it yourself</h2>
-
-        <p>If you want to start the daemon without an agent, one command is enough:</p>
-
-        <pre><code class="language-bash">playwriter session new</code></pre>
-
-        <p>Then click the icon on a website tab. The daemon stays running in the background.</p>
-      </section>
-
-      <section>
-        <h2>If the icon stays gray</h2>
-
-        <ul>
-          <li>The daemon must be running on <strong>this computer</strong>, not inside Docker or a remote SSH host.</li>
-          <li>You must click the icon on a normal website. Chrome pages such as <code>chrome://extensions</code> cannot be attached.</li>
-          <li><strong>Gray:</strong> tab is not attached. <strong>Orange ...:</strong> waiting for the daemon. <strong>Green:</strong> attached. <strong>Red !:</strong> error.</li>
-        </ul>
-      </section>
-
-      <section>
-        <h2>Need help?</h2>
-
-        <p>
-          Docs:
-          <a href="https://playwriter.dev/docs/installation" target="_blank" rel="noopener noreferrer">installation</a>
-          ·
-          <a href="https://playwriter.dev/docs/quick-start" target="_blank" rel="noopener noreferrer">quick start</a>
-          ·
-          <a href="https://github.com/remorses/playwriter" target="_blank" rel="noopener noreferrer">GitHub</a>
-        </p>
-      </section>
-
-      <footer>
-        <p>Playwriter &copy; Microsoft Corporation &middot; Licensed under Apache-2.0</p>
-      </footer>
+      <p>Or ask your agent to use the browser. After that, click the icon on a normal website tab.</p>
     </main>
     <script src="prism.min.js"></script>
     <script src="prism-bash.min.js"></script>
-    <script>
-      const port = new URLSearchParams(location.search).get('port') || '19988'
-      const statusEl = document.getElementById('daemon-status')
-      const bannerEl = document.getElementById('why-banner')
-
-      async function checkDaemon() {
-        try {
-          const res = await fetch('http://127.0.0.1:' + port + '/version', { signal: AbortSignal.timeout(1500) })
-          if (!res.ok) {
-            throw new Error('not ok')
-          }
-          statusEl.textContent =
-            'Daemon is running. Click the Playwriter icon on a website tab. It turns green.'
-          statusEl.dataset.state = 'ready'
-          bannerEl.classList.add('ready')
-        } catch {
-          statusEl.textContent = 'Daemon is not running yet. Waiting for the first playwriter command.'
-          statusEl.dataset.state = 'waiting'
-          bannerEl.classList.remove('ready')
-        }
-      }
-
-      void checkDaemon()
-      setInterval(() => {
-        void checkDaemon()
-      }, 2000)
-    </script>
   </body>
 </html>

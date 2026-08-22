@@ -28,7 +28,7 @@ Other browser MCPs spawn a fresh Chrome — no logins, no extensions, instantly 
 
 4. Install the skill so your agent knows how to use Playwriter:
    ```bash
-   npx -y skills add remorses/playwriter
+   npx -y skills add https://playwriter.dev
    ```
 
 ## Quick Start
