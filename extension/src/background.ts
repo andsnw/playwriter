@@ -1935,7 +1935,38 @@ async function onTabActivated(activeInfo: chrome.tabs.TabActiveInfo): Promise<vo
   store.setState({ currentTabId: activeInfo.tabId, preferredWindowId: activeInfo.windowId })
 }
 
+const TUTORIAL_PAGE_PATH = 'src/tutorial.html'
+
+// Icon only attaches a tab. Daemon starts on the first playwriter command.
+function shouldOpenTutorialPage(): boolean {
+  if (import.meta.env.TESTING) return false
+  if (!__PLAYWRITER_OPEN_WELCOME_PAGE__) return false
+  return store.getState().connectionState === 'idle'
+}
+
+async function openTutorialPage(): Promise<void> {
+  try {
+    const baseUrl = chrome.runtime.getURL(TUTORIAL_PAGE_PATH)
+    const tabs = await chrome.tabs.query({})
+    const existing = tabs.find((t) => t.url?.startsWith(baseUrl))
+    if (existing?.id) {
+      await chrome.tabs.update(existing.id, { active: true })
+      if (existing.windowId !== undefined) {
+        await chrome.windows.update(existing.windowId, { focused: true })
+      }
+      return
+    }
+    await chrome.tabs.create({ url: `${TUTORIAL_PAGE_PATH}?port=${RELAY_PORT}` })
+  } catch (e) {
+    logger.debug('Failed to open tutorial page:', e)
+  }
+}
+
 async function onActionClicked(tab: chrome.tabs.Tab): Promise<void> {
+  if (shouldOpenTutorialPage()) {
+    void openTutorialPage()
+  }
+
   if (!tab.id) {
     logger.debug('No tab ID available')
     return
