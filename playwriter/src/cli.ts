@@ -1484,7 +1484,7 @@ cli
       console.log('  1. playwriter skill')
       console.log('     or https://playwriter.dev/SKILL.md')
       console.log(`  2. playwriter recorder events -r ${result.recordingId}`)
-      console.log('  3. Write SKILL.md + utils.js with playwriter -e examples from the events')
+      console.log('  3. Write SKILL.md + a named helper (submit.js, sdk.js) with playwriter -e examples from the events')
     } catch (error: any) {
       console.error(`Error: ${error.message}`)
       process.exit(1)

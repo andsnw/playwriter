@@ -33,8 +33,9 @@ writes a **skill**: a SKILL.md of markdown instructions with example playwriter 
     locator against the live page.
   </Step>
   <Step title='The agent writes the skill'>
-    It produces a `SKILL.md` with numbered playwriter commands plus a `utils.js`,
-    then validates the whole flow by replaying the utils end-to-end.
+    It produces a `SKILL.md` with numbered playwriter commands plus a helper
+    script (`submit.js`, `sdk.js`), then validates the whole flow by replaying
+    that script end-to-end.
   </Step>
 </Steps>
 
@@ -207,7 +208,7 @@ Every event is one JSON line with a timestamp (`t`, seconds since start):
 | Event type                    | What it captures                                                                                                                                                          |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `action`                      | Click, fill, press, select, setInputFiles — with generated Playwright locator code                                                                                        |
-| `network`                     | POST/PUT/PATCH/DELETE xhr/fetch only: method, url, status, post data, and **response bodies** for JSON/text                                                               |
+| `network`                     | POST/PUT/PATCH/DELETE xhr/fetch only: method, url, status, post data, and **response bodies** for JSON/text. **WebSockets are not recorded.**                             |
 | `download`                    | File downloads: source url and suggested filename                                                                                                                         |
 | `navigation`                  | Full navigations                                                                                                                                                          |
 | `page-opened` / `page-closed` | Popups and new tabs, with page aliases                                                                                                                                    |
@@ -219,8 +220,9 @@ Every event is one JSON line with a timestamp (`t`, seconds since start):
 The `recorder start` output tells the agent to read
 [https://playwriter.dev/SKILL.md](https://playwriter.dev/SKILL.md) first, inspect
 the events, verify locators against the live page, then write a **`SKILL.md`**
-plus a **`utils.js`**: markdown instructions for the flow you performed, with
-example **playwriter** commands, and an importable script for cheap replay.
+plus a helper script named for the flow (`submit.js`, `sdk.js`): markdown
+instructions for the flow you performed, with example **playwriter**
+commands, and an importable script for cheap replay.
 
 ````markdown
 # Submit to directory
@@ -247,10 +249,10 @@ playwriter -s 1 -e 'await page.getByRole("button", { name: "Submit" }).click()'
 ```
 ````
 
-Replay the utils script (preferred, fewer tokens):
+Replay the helper script (preferred, fewer tokens):
 
 ```bash
-playwriter -s 1 -e 'const { submitProduct } = await import("/abs/path/.agents/skills/submit-to-directory/utils.js"); await submitProduct({ page, name: "Acme", url: "https://acme.com" })'
+playwriter -s 1 -e 'const { submitProduct } = await import("./.agents/skills/submit-to-directory/submit.js"); await submitProduct({ page, name: "Acme", url: "https://acme.com" })'
 ```
 
 The agent validates the skill by running that replay end-to-end before calling it done.
@@ -261,9 +263,9 @@ The agent validates the skill by running that replay end-to-end before calling i
 
 Use a site normally — create a job on Midjourney, run a search, export a report — while the
 recorder captures every fetch/XHR request **and its response body**. The recording reveals
-what no agent can guess: the real request sequence, auth headers via cookies, payload shapes,
-and response schemas. The agent then writes a **fully typed client or CLI** for the site's
-internal API that skips the browser entirely:
+what no agent can guess: the real request sequence, payload shapes, and response schemas.
+The agent then writes a **class SDK** that calls those endpoints with in-page `fetch`
+(`page.evaluate`), so cookies, captchas, and Cloudflare stay in the real tab:
 
 ```bash
 # the site's API surface, extracted from one recorded session
@@ -272,8 +274,9 @@ playwriter recorder events | jq -r 'select(.type == "network" and .responseBodyS
 playwriter recorder events 14 15 22
 ```
 
-For streaming or bot-protected sites, the agent keeps the browser but calls the endpoints
-via in-page `fetch`, sharing your cookies and TLS fingerprint.
+The SDK is a class in `sdk.js`. Shared state (`page`) goes in the constructor.
+Methods take one object argument. `fetch` runs inside `page.evaluate`. Failed
+calls throw with method, path, status, and response text.
 
 ### CRM data entry
 
@@ -404,6 +407,6 @@ A tab frame never got a document (empty target, some iframes). Start fails in
 <Tip>
 The best prompt is simple: **"start recording, I'll show you the workflow"**. The
 agent guesses skill name, location, and parameters from the events, writes the
-SKILL.md and utils.js, then tells you what it assumed.
+SKILL.md and a named helper script, then tells you what it assumed.
 </Tip>
 </Aside>

@@ -60,6 +60,7 @@ playwriter recorder events 4 7 12
 playwriter recorder events | jq -r 'select(.type == "action") | .code'
 
 # mutating xhr/fetch (POST/PUT/PATCH/DELETE). Thin view shows sizes.
+# WebSockets are not recorded. A submit click with no matching POST is a hint.
 playwriter recorder events | jq -r 'select(.type == "network") | [.id, .method, .status, .url, .responseBodySize] | @tsv'
 playwriter recorder events 14 15
 
@@ -69,9 +70,10 @@ playwriter recorder events | jq 'select(.type == "download" or .type == "console
 
 Event types: `recording-started`, `action` (`.code` is locator code such as
 `await page.getByRole('button', { name: 'Submit' }).click()`), `signal`,
-`navigation`, `page-opened`, `page-closed`, `network` (mutating xhr/fetch with
-truncated `responseBody`), `download`, `console`, `page-error`,
-`recording-stopped` (includes `framesDir` and `frameCount`).
+`navigation`, `page-opened`, `page-closed`, `network` (mutating xhr/fetch only, with
+truncated `responseBody`; **WebSockets are not captured**), `download`,
+`console`, `page-error`, `recording-stopped` (includes `framesDir` and
+`frameCount`).
 
 Action events also carry structured fields copied from Playwright: `text` (fill),
 `key` (press), `options` (select), `files` (setInputFiles), `button` and
@@ -118,7 +120,9 @@ client-specific folder such as `~/.config/opencode/skills/`:
 - personal (all projects): `~/.agents/skills/<name>/`
 - project-local: `.agents/skills/<name>/` in the current repo
 
-Write **`SKILL.md`** and a **`utils.js`** (or `utils.ts`) in that directory.
+Write **`SKILL.md`** plus a helper script in that directory. Name the
+script for what it does (`submit.js`, `sdk.js`). Do not default to
+`utils.js`.
 
 `SKILL.md` frontmatter has `name` and `description` (when to load the skill).
 The body explains the flow as **markdown instructions with example playwriter
@@ -156,16 +160,25 @@ playwriter -s 1 -e 'await page.getByRole("button", { name: "Submit" }).click()'
 playwriter -s 1 -e 'await page.getByText("Thanks! Your product is under review.").waitFor()'
 ```
 
-Or import the utils script (preferred for replay; fewer tokens):
+Or import the helper script (preferred for replay; fewer tokens).
+Never put a machine-specific absolute path in SKILL.md or the script.
+Relative to the playwriter cwd for a project skill:
 
 ```bash
-playwriter -s 1 -e 'const { submitProduct } = await import("/abs/path/.agents/skills/submit-to-directory/utils.js"); await submitProduct({ page, name, url })'
+playwriter -s 1 -e 'const { submitProduct } = await import("./.agents/skills/submit-to-directory/submit.js"); await submitProduct({ page, name, url })'
+```
+
+For a personal skill, resolve the home directory at runtime:
+
+```bash
+playwriter -s 1 -e 'const { join } = require("node:path"); const { homedir } = require("node:os"); const { submitProduct } = await import(join(homedir(), ".agents/skills/submit-to-directory/submit.js")); await submitProduct({ page, name, url })'
 ```
 ````
 
-`utils.js` is an importable ESM script. Export functions that accept `{ page }`
-plus parameters. Keep them small (one per phase, plus one top-level that runs
-the whole flow). The playwriter sandbox can import local files.
+The helper is an importable ESM script. Name it for the flow. For UI replay,
+export functions that accept `{ page }` plus parameters. For a recorded JSON
+API, export a class from `sdk.js` (see below). The playwriter sandbox can
+import local files.
 
 Rules:
 
@@ -174,6 +187,9 @@ Rules:
 - After each action, wait for the outcome seen in the events (`waitForURL`,
   `locator.waitFor`, or the mutating network request). No blind sleeps.
 - Parameterize demo-typed values. Keep everything else literal.
+- Never hardcode absolute filesystem paths (`/Users/...`, `C:\...`, `/abs/path/...`)
+  in SKILL.md or helper scripts. Relative import from the playwriter cwd, or
+  `join(homedir(), '.agents/skills/<name>/<script>.js')`.
 - If the flow needs auth, check a signed-in indicator first and tell the user
   to log in if it is missing.
 - Never hardcode secrets, cookies, or tokens.
@@ -181,21 +197,208 @@ Rules:
   once. Do not add generic retry loops.
 - Throw or print a clear error when an expected outcome does not appear.
 
-If recorded `network` events show a clean fetch/XHR JSON API, calling that API
-(in-page `fetch`, same cookies) is faster than driving the UI. Prefer UI
-automation when unsure, and mention the API alternative in the skill.
+If recorded `network` events show a clean fetch/XHR JSON API, write an in-page
+SDK (next section). Prefer UI automation when the API is unclear.
+
+## In-page XHR SDK
+
+When the recording has mutating xhr/fetch with JSON bodies, **do not click
+through the UI**. Write a small JS SDK and call those endpoints from
+`page.evaluate`. The request then runs in the real tab: cookies, captchas,
+Cloudflare, and the TLS fingerprint stay in the browser.
+
+Put the SDK in **`sdk.js`** next to `SKILL.md` (or another name that matches
+the site, like `directory-sdk.js`). Use a **class**. Pass shared handles in
+the constructor (`page`, origin). Methods take **one object argument**.
+Annotate inputs and returns with **JSDoc comments** (this is a `.js` file;
+do not switch to TypeScript unless the user asks).
+
+Never call the site API with Node `fetch`. Node has no session cookies and
+trips bot checks.
+
+```js
+/**
+ * @typedef {{ page: { evaluate: Function, url: () => string, goto: Function } }} ClientOptions
+ * @typedef {{ name: string, url: string }} SubmitProductInput
+ * @typedef {{ id: string, status: string }} SubmitProductResult
+ */
+
+export class DirectoryClient {
+  /** @param {ClientOptions} opts */
+  constructor({ page }) {
+    this.page = page
+  }
+
+  /**
+   * @param {{ path: string, method?: string, body?: unknown }} args
+   * @returns {Promise<unknown>}
+   */
+  async request({ path, method = 'POST', body }) {
+    return await this.page.evaluate(
+      async ({ path, method, body }) => {
+        const res = await fetch(path, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          credentials: 'include',
+          body: body === undefined ? undefined : JSON.stringify(body),
+        })
+        const text = await res.text()
+        if (!res.ok) {
+          throw new Error(`${method} ${path} failed: ${res.status} ${text}`)
+        }
+        if (!text) {
+          return null
+        }
+        try {
+          return JSON.parse(text)
+        } catch {
+          return text
+        }
+      },
+      { path, method, body },
+    )
+  }
+
+  /**
+   * @param {SubmitProductInput} input
+   * @returns {Promise<SubmitProductResult>}
+   */
+  async submitProduct({ name, url }) {
+    return await this.request({
+      path: '/api/products',
+      body: { name, url },
+    })
+  }
+}
+```
+
+Replay:
+
+```bash
+playwriter -s 1 -e 'const { DirectoryClient } = await import("./.agents/skills/submit-to-directory/sdk.js"); const client = new DirectoryClient({ page }); console.log(await client.submitProduct({ name: "Acme", url: "https://acme.com" }))'
+```
+
+Rules:
+
+- One `request` helper on the class. Every method goes through it.
+- Throw on non-OK. The message must include **method, path, status, and
+  response text** so a later agent can debug without re-recording.
+- Keep payloads from the recorded `network` events. Parameterize the fields
+  the user typed.
+- Open the site origin first so `fetch('/api/...')` is same-origin.
+- If a call needs a prior id or csrf token, fetch that in another method and
+  pass it through the constructor or as a method arg. Do not hardcode tokens.
+
+## WebSockets are not in the recording
+
+The recorder only stores mutating xhr/fetch. It does **not** store
+`WebSocket` frames. A listen socket may already be open before `recorder
+start` (SPA already on the page). Generate / stream work often never
+appears as a `network` event.
+
+If the user submitted or started a job and the events have **no POST that
+matches that action** (only analytics, quota, billing), do not stop at REST.
+
+A listen socket is often already open. **Install a tap, then reload**, so
+the page's own `new WebSocket` goes through your wrapper. `page.evaluate`
+alone is too late. `addInitScript` survives the reload.
+
+```bash
+playwriter -s 1 -e '
+/**
+ * @typedef {"construct" | "send" | "message" | "close" | "error"} WsTapKind
+ * @typedef {{ t: number, kind: WsTapKind, url: string, data?: string }} WsTapEvent
+ */
+
+await page.addInitScript(() => {
+  const g = /** @type {typeof globalThis & { __wsTap?: WsTapEvent[] }} */ (globalThis)
+  if (g.__wsTap) {
+    return
+  }
+  /** @type {WsTapEvent[]} */
+  const tap = []
+  g.__wsTap = tap
+  const NativeWebSocket = WebSocket
+  g.WebSocket = class TappedWebSocket extends NativeWebSocket {
+    /**
+     * @param {string | URL} url
+     * @param {string | string[]=} protocols
+     */
+    constructor(url, protocols) {
+      super(url, protocols)
+      const href = String(url)
+      /**
+       * @param {WsTapKind} kind
+       * @param {string} [data]
+       */
+      const push = (kind, data) => {
+        tap.push({ t: Date.now(), kind, url: href, data })
+      }
+      push("construct")
+      const send = this.send.bind(this)
+      this.send = (data) => {
+        const text = typeof data === "string" ? data.slice(0, 4000) : `[${data?.constructor?.name || "binary"}]`
+        push("send", text)
+        return send(data)
+      }
+      this.addEventListener("message", (ev) => {
+        push("message", typeof ev.data === "string" ? ev.data.slice(0, 4000) : "[binary]")
+      })
+      this.addEventListener("close", () => {
+        push("close")
+      })
+      this.addEventListener("error", () => {
+        push("error")
+      })
+    }
+  }
+})
+await page.reload({ waitUntil: "domcontentloaded" })
+'
+
+# replay the user action (submit, generate, …), then dump the tap
+playwriter -s 1 -e '
+/**
+ * @typedef {{ t: number, kind: string, url: string, data?: string }} WsTapEvent
+ * @type {WsTapEvent[]}
+ */
+const events = await page.evaluate(() => {
+  return globalThis.__wsTap || []
+})
+console.log(JSON.stringify(events, null, 2))
+'
+```
+
+Note: `addInitScript` + reload is required. Wrapping `WebSocket` after load
+misses the socket the page already opened. After reload the tap is often
+`[]` until you **replay the user action** (submit, generate). That is not
+a failed wrap. Check `WebSocket.name === "TappedWebSocket"` if you need
+to confirm the hook. The typedefs are for the agent and for later
+`sdk.js` methods. Code inside `evaluate` / `addInitScript` must stay
+erasable JS (JSDoc only).
+
+Then grep scripts if the tap is empty:
+`createEditor({ cdp }).grep({ regex: /wss:\\/\\/|new WebSocket/ })`.
+Search public reverse-engineering only after the page scripts.
+
+Add a class method on `sdk.js` that opens or reuses that socket **inside
+`page.evaluate`**, same as fetch. Do not connect from Node. Cookies and
+Cloudflare stay on the tab.
+
+A `quota_info` / credits POST after submit is not the generate call. Keep
+looking.
 
 ## Validate
 
 The skill is not done until replay succeeds end-to-end with test parameters.
-Prefer replaying the utils script. If that fails, snapshot the live page, fix
+Prefer replaying the helper script. If that fails, snapshot the live page, fix
 the locator or wait, and run again.
 
 ## Updating an existing skill
 
 If a similar skill already exists (check the location first), update it instead
-of creating a new one: read the current SKILL.md and utils file, re-record or
-compare locators, fix the root cause, keep working parts, re-validate.
+of creating a new one: read the current SKILL.md and helper scripts, re-record
+or compare locators, fix the root cause, keep working parts, re-validate.
 
 ## Checklist
 
@@ -204,5 +407,7 @@ compare locators, fix the root cause, keep working parts, re-validate.
 - Demo-typed values are parameters
 - Waits reflect real timing (user remarks + event gaps)
 - Secrets are never hardcoded
-- Replay uses playwriter commands (inline `-e` or an imported utils script)
+- No absolute filesystem paths in SKILL.md or helper scripts
+- Replay uses playwriter commands (inline `-e` or an imported helper script)
+- XHR skills use an in-page class SDK; fetch errors include status and body
 - The flow was validated end-to-end at least once
