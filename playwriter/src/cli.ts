@@ -1597,7 +1597,15 @@ cli
         signal: AbortSignal.timeout(5000),
       })
       const { recordings } = (await response.json()) as {
-        recordings: Array<{ recordingId: string; sessionId: string; startedAt: number; eventCount: number; filePath: string }>
+        recordings: Array<{
+          recordingId: string
+          sessionId: string
+          startedAt: number
+          eventCount: number
+          filePath: string
+          pageUrls?: string[]
+          lastUrl?: string
+        }>
       }
       if (recordings.length === 0) {
         console.log('No active recordings')
@@ -1605,7 +1613,9 @@ cli
       }
       for (const recording of recordings) {
         const uptime = Math.round((Date.now() - recording.startedAt) / 1000)
+        const urls = recording.pageUrls?.length ? recording.pageUrls.join(', ') : recording.lastUrl || '(no pages)'
         console.log(`Recording ${recording.recordingId} (session ${recording.sessionId}): ${recording.eventCount} events, running ${uptime}s`)
+        console.log(`  ${urls}`)
         console.log(`  ${recording.filePath}`)
       }
     } catch (error: any) {

@@ -17,10 +17,9 @@ a default one bound to the connected extension.
 Resolution order for a request without `sessionId`:
 
 ```
-explicit sessionId  ►  use it
-exactly one session ►  use it
-many sessions       ►  error, pass a sessionId
-no sessions         ►  create one from the connected extension
+explicit sessionId          ►  use it
+free extension session      ►  use it
+no free extension session   ►  create one from the connected extension
 ```
 
 If no extension is connected, the error is now

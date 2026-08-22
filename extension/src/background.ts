@@ -2452,6 +2452,23 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
 // Sync icons on first load
 void updateIcons()
 
+// Recording started from the toolbar. Passed back on stop so the Stop button
+// is never ambiguous when another recording is also active.
+let toolbarRecordingId: string | null = null
+
+function toastToolbar(tabId: number, msg: string): void {
+  chrome.scripting
+    .executeScript({
+      target: { tabId, allFrames: false },
+      world: 'MAIN',
+      func: (text: string) => {
+        ;(window as any).__playwriterToolbarShowToast?.(text)
+      },
+      args: [msg],
+    })
+    .catch(() => {})
+}
+
 // Handle messages from content scripts (recorder commands) and offscreen document (recording chunks)
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   // Action recorder start/stop: routed through extension messaging to avoid CORS.
@@ -2464,22 +2481,16 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
       body: '{}',
     })
       .then(async (response) => {
-        const result = (await response.json()) as { error?: string }
-        if (response.ok) {
+        const result = (await response.json()) as { error?: string; recordingId?: string }
+        if (response.ok && result.recordingId) {
+          toolbarRecordingId = result.recordingId
           return
         }
         logger.error('Action recorder start failed:', result.error || response.status)
         if (!senderTabId) {
           return
         }
-        await chrome.scripting.executeScript({
-          target: { tabId: senderTabId, allFrames: false },
-          world: 'MAIN',
-          func: (msg: string) => {
-            ;(window as any).__playwriterToolbarShowToast?.(msg)
-          },
-          args: [result.error || 'Failed to start recording'],
-        })
+        toastToolbar(senderTabId, result.error || 'Failed to start recording')
       })
       .catch((err) => {
         logger.error('Action recorder start failed:', err)
@@ -2492,11 +2503,19 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
     fetch(`http://${RELAY_HOST}:${RELAY_PORT}/recorder/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify(toolbarRecordingId ? { recordingId: toolbarRecordingId } : {}),
     })
       .then((r) => r.json())
-      .then((result: { recordingId?: string }) => {
-        if (!result.recordingId || !senderTabId) return
+      .then((result: { recordingId?: string; error?: string }) => {
+        if (!result.recordingId) {
+          logger.error('Action recorder stop failed:', result.error || 'unknown')
+          if (senderTabId) {
+            toastToolbar(senderTabId, result.error || 'Failed to stop recording')
+          }
+          return
+        }
+        toolbarRecordingId = null
+        if (!senderTabId) return
         const prompt = [
           'I just recorded a browser workflow (recording ' + result.recordingId + ').',
           'Analyze it and create a reusable skill from it.',
@@ -2505,7 +2524,7 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
           'https://playwriter.dev/SKILL.md',
           '',
           'Then run:',
-          'playwriter recorder events',
+          'playwriter recorder events -r ' + result.recordingId,
         ].join('\n')
         chrome.scripting
           .executeScript({

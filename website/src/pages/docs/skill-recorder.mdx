@@ -93,6 +93,113 @@ Then it drills into the events that matter, by id:
 playwriter recorder events 7   # full request postData + responseBody of event 7
 ```
 
+## How it works
+
+The **goal** is not a Playwright test file. You show a workflow once in your real
+Chrome. The agent turns that recording into a **skill**: markdown steps plus
+example `playwriter` commands an agent can replay later with your logins.
+
+Recording is a **relay daemon** job. The CLI or toolbar only toggles it. Closing
+the terminal does not stop it.
+
+```diagram
+You (Chrome)                                   Agent (CLI)
+     │                                              │
+     │  toolbar Record                              │  playwriter recorder start
+     ▼                                              ▼
+POST /recorder/start                         POST /recorder/start
+(no sessionId)                               (-s optional)
+     │                                              │
+     └─────────────────────┬────────────────────────┘
+                           ▼
+                    Relay picks a session
+                    (free extension session,
+                     or creates one)
+                           │
+                           ▼
+                 Playwright API recorder
+                 ~/.playwriter/recordings/<id>/
+                           │
+     Stop                  │           playwriter recorder stop
+     (its recording id)    │                    │
+                           ▼                    ▼
+                    1 recording  ►  stop it
+                    2+ recordings ►  error with page URLs
+                                     then: recorder stop <id>
+```
+
+### Why session pick barely matters
+
+A playwriter **session** is an isolated sandbox (`state`). Browser **tabs** are
+shared across extension sessions. The recorder attaches to one session's
+Playwright context so it can listen for clicks. Any extension session sees the
+same tabs.
+
+The agent does not need that session id to consume the recording. It uses
+`playwriter recorder stop` and `playwriter recorder events`. If two recordings
+are active, **stop** lists each one with its current or last page URL so the
+agent can pick or ask you.
+
+The only session the toolbar must avoid is a **headless or cloud** session,
+which has no user tabs. The relay skips those and creates an extension session
+instead.
+
+### Toolbar vs CLI
+
+| Start from | What happens |
+| --- | --- |
+| In-page **Record** | `POST /recorder/start` with no session id. Never fails just because many sessions exist. |
+| `playwriter recorder start` | Reuses the only session, or creates one. Pass `-s <id>` when several sessions exist. |
+| `playwriter recorder start -s 1` | Attaches to session 1. Fails with 409 if that session is already recording. |
+
+The toolbar **Stop** button sends the recording id it started, so it is never
+ambiguous. `playwriter recorder stop` without an id stops the only active
+recording, or errors with URLs if there are several.
+
+## Commands
+
+```bash
+playwriter recorder start            # reuse the only session, or create one
+playwriter recorder start -s 1       # attach to an existing session
+playwriter recorder status           # active recordings + current page urls
+playwriter recorder stop             # stop the only active recording
+playwriter recorder stop 3           # stop recording 3
+playwriter recorder events           # thin timeline of the latest recording
+playwriter recorder events -r 3      # events of recording 3
+playwriter recorder events 4 7       # full details of events 4 and 7
+playwriter recorder events --type action
+playwriter recorder events --full    # whole timeline, no size projection
+```
+
+`recorder events` prints one JSON object per line (jq-friendly). Default output
+is a **thin timeline**: heavy payloads become sizes. Pass event ids to read
+full request and response bodies.
+
+```bash
+playwriter recorder events | jq -r 'select(.type == "action") | .code'
+playwriter recorder events | jq -r 'select(.type == "network") | [.id, .method, .status, .url] | @tsv'
+```
+
+## Multiple recordings
+
+Two recordings can be active at once (toolbar + CLI, or two agents). Stop
+without an id then **throws** and prints enough to choose:
+
+```
+Multiple active recordings. Pass a recording id.
+
+  3  session 1  https://app.example.com/settings
+  5  session 2  https://github.com/remorses/playwriter
+```
+
+```bash
+playwriter recorder status
+playwriter recorder stop 3
+playwriter recorder events -r 3
+```
+
+Ask the user which URL matches the workflow if it is not obvious.
+
 ## What gets recorded
 
 Every event is one JSON line with a timestamp (`t`, seconds since start):
@@ -229,8 +336,60 @@ agent can replay and debug against.
 ### Fixing broken skills
 
 When a site redesign breaks a skill, re-record the flow. The agent diffs the new locators
-against the old SKILL.md and updates only the selectors that changed, keeping the
+against the old SKILL.md and utils file and updates only the selectors that changed, keeping the
 working parts untouched.
+
+## Troubleshooting
+
+### Record in the toolbar does nothing, or shows an error toast
+
+The button talks to `http://127.0.0.1:19988/recorder/start`. Check:
+
+1. The extension icon is **green** on that tab
+2. The relay is running (`playwriter session list` should respond)
+3. `playwriter logfile` for `Record start endpoint error`
+
+It no longer fails just because many playwriter sessions are open. It still
+fails if the extension is disconnected, or if every extension session is
+already recording and a new session cannot be created.
+
+### `playwriter recorder start` asks for `-s`
+
+The CLI still requires `-s` when several sessions exist, because you are
+choosing a sandbox to attach to. The toolbar does not. Pass `-s` or let the
+user click Record.
+
+### Stop says "Multiple active recordings"
+
+That is expected when two recordings are running. The error lists ids and page
+URLs. Stop the one that matches the workflow:
+
+```bash
+playwriter recorder stop 3
+```
+
+### Recording has no clicks
+
+The recorder only sees tabs where Playwriter is enabled. Click the extension
+icon on the tab you are using. Headless and direct-CDP sessions do not record
+your real Chrome; use the extension.
+
+### Recording died after 20 minutes
+
+Auto-stop is a safety limit. Start again. Events already written stay in
+`~/.playwriter/recordings/<id>.json`.
+
+### Locators from the recording do not work
+
+Do not trust recorded locators blindly. Snapshot the live page and verify each
+one. Role names in generated locators may be prefixes of the live accessible
+name; they still match. Drop select-all / modifier keypresses that happen just
+before a fill.
+
+### Start hangs or errors about a stuck frame
+
+A tab frame never got a document (empty target, some iframes). Start fails in
+15s instead of hanging. Close unused iframe-heavy tabs and retry.
 
 ## Notes
 

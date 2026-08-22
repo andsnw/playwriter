@@ -4,7 +4,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { BrowserContext } from '@xmorse/playwright-core'
-import { ActionRecordingManager, isTelemetryUrl, parseRecording, projectThinEvent } from './action-recorder.js'
+import {
+  ActionRecordingManager,
+  formatAmbiguousRecordingsError,
+  isTelemetryUrl,
+  parseRecording,
+  pickRecorderStartSession,
+  projectThinEvent,
+} from './action-recorder.js'
 
 function createFakeContext(options: {
   enable?: () => Promise<void>
@@ -176,6 +183,100 @@ describe('ActionRecordingManager start lifecycle', () => {
       await expect(start).rejects.toThrow(/stopped before it finished starting/i)
       expect(manager.list()).toEqual([])
     })
+  })
+})
+
+describe('pickRecorderStartSession', () => {
+  test('uses an explicit session id', () => {
+    expect(
+      pickRecorderStartSession({
+        explicitSessionId: '9',
+        sessions: [
+          { id: '1', extensionId: 'ext' },
+          { id: '2', extensionId: 'ext' },
+        ],
+        busySessionIds: ['1'],
+      }),
+    ).toEqual({ kind: 'use', sessionId: '9' })
+  })
+
+  test('picks a free extension session when many exist', () => {
+    expect(
+      pickRecorderStartSession({
+        sessions: [
+          { id: '1', extensionId: null },
+          { id: '2', extensionId: 'ext' },
+          { id: '3', extensionId: 'ext' },
+        ],
+        busySessionIds: ['2'],
+      }),
+    ).toEqual({ kind: 'use', sessionId: '3' })
+  })
+
+  test('creates when every extension session is already recording', () => {
+    expect(
+      pickRecorderStartSession({
+        sessions: [
+          { id: '1', extensionId: 'ext' },
+          { id: '2', extensionId: 'ext' },
+        ],
+        busySessionIds: ['1', '2'],
+      }),
+    ).toEqual({ kind: 'create' })
+  })
+
+  test('creates when only headless sessions exist', () => {
+    expect(
+      pickRecorderStartSession({
+        sessions: [{ id: '1', extensionId: null }],
+        busySessionIds: [],
+      }),
+    ).toEqual({ kind: 'create' })
+  })
+})
+
+describe('ActionRecordingManager stop disambiguation', () => {
+  test('stop without an id throws with page urls when two recordings are active', async () => {
+    await withTempRecordings(async () => {
+      const manager = new ActionRecordingManager({
+        logger: { log: () => {}, error: () => {} },
+      })
+      const first = await manager.start({
+        context: createFakeContext({}),
+        sessionId: '1',
+      })
+      const second = await manager.start({
+        context: createFakeContext({}),
+        sessionId: '2',
+      })
+      await expect(manager.stop({})).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('Multiple active recordings'),
+        recordings: [
+          { recordingId: first.recordingId, sessionId: '1' },
+          { recordingId: second.recordingId, sessionId: '2' },
+        ],
+      })
+      expect(manager.list()).toHaveLength(2)
+      const stopped = await manager.stop({ recordingId: first.recordingId })
+      expect(stopped.recordingId).toBe(first.recordingId)
+      expect(manager.list()).toHaveLength(1)
+      await manager.stop({})
+    })
+  })
+
+  test('formatAmbiguousRecordingsError lists current or last urls', () => {
+    expect(
+      formatAmbiguousRecordingsError([
+        { recordingId: '3', sessionId: '1', pageUrls: ['https://app.example.com/settings'], lastUrl: '' },
+        { recordingId: '5', sessionId: '2', pageUrls: [], lastUrl: 'https://github.com/remorses/playwriter' },
+      ]),
+    ).toMatchInlineSnapshot(`
+      "Multiple active recordings. Pass a recording id.
+
+        3  session 1  https://app.example.com/settings
+        5  session 2  https://github.com/remorses/playwriter"
+    `)
   })
 })
 

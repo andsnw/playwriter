@@ -2430,18 +2430,21 @@ export async function startPlayWriterCDPRelayServer({
     }
     try {
       const manager = await getExecutorManager()
-      // Toolbar sends no sessionId. Reuse the only session, or create one.
+      const recordingManager = await getActionRecordingManager()
+      const { pickRecorderStartSession } = await import('./action-recorder.js')
+      // Toolbar sends no sessionId. Never fail on many sessions: reuse a free
+      // extension session, or create one. Session pick does not matter for
+      // playback; the agent chooses the recording at stop time by page URL.
+      const pick = pickRecorderStartSession({
+        explicitSessionId: normalizeSessionId(body.sessionId) || undefined,
+        sessions: manager.listSessions(),
+        busySessionIds: recordingManager.list().map((recording) => {
+          return recording.sessionId
+        }),
+      })
       const sessionId: string = (() => {
-        const explicit = normalizeSessionId(body.sessionId)
-        if (explicit) {
-          return explicit
-        }
-        const sessions = manager.listSessions()
-        if (sessions.length === 1) {
-          return String(sessions[0]!.id)
-        }
-        if (sessions.length > 1) {
-          throw new Error(`Multiple sessions (${sessions.map((s) => s.id).join(', ')}). Pass a sessionId.`)
+        if (pick.kind === 'use') {
+          return pick.sessionId
         }
         const conn = getExtensionConnection(null, {
           allowFallback: store.getState().extensions.size === 1,
@@ -2465,9 +2468,7 @@ export async function startPlayWriterCDPRelayServer({
         return c.json({ error: `Session ${sessionId} not found. Run 'playwriter session new' first.` }, 404)
       }
       const context = await executor.getBrowserContext()
-      const recordingManager = await getActionRecordingManager()
       const recorder = await recordingManager.start({ context, sessionId })
-      notifyExtensionRecorderState(true)
       return c.json({ recordingId: recorder.recordingId, sessionId, file: recorder.filePath })
     } catch (error: any) {
       logger?.error('Record start endpoint error:', error)
@@ -2481,10 +2482,13 @@ export async function startPlayWriterCDPRelayServer({
       const recordingId = normalizeSessionId(body.recordingId)
       const recordingManager = await getActionRecordingManager()
       const result = await recordingManager.stop({ recordingId: recordingId || undefined })
-      notifyExtensionRecorderState(false)
       return c.json(result)
     } catch (error: any) {
-      return c.json({ error: error.message }, recordingErrorStatus(error))
+      const recordings = (error as { recordings?: unknown }).recordings
+      return c.json(
+        recordings ? { error: error.message, recordings } : { error: error.message },
+        recordingErrorStatus(error),
+      )
     }
   })
 

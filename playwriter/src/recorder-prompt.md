@@ -37,6 +37,10 @@ When the user says stop/done:
 playwriter recorder stop
 ```
 
+If that errors because more than one recording is active, the message lists
+each recording id with its current or last page URL. Pick the one that matches
+this workflow (or ask the user), then `playwriter recorder stop <id>`.
+
 ## Inspect the events
 
 `recorder events` prints one JSON object per line (jq-friendly). `t` is seconds

@@ -99,13 +99,49 @@ export interface RecordedEvent {
   [key: string]: unknown
 }
 
+export type RecordingSummary = {
+  recordingId: string
+  sessionId: string
+  pageUrls: string[]
+  lastUrl: string
+}
+
 /** Error with an HTTP status code hint for the relay routes */
 export class RecordingError extends Error {
   statusCode: number
+  recordings?: RecordingSummary[]
   constructor(message: string, statusCode: number) {
     super(message)
     this.statusCode = statusCode
   }
+}
+
+/** Toolbar /recorder/start sends no sessionId. Never fail on many sessions. */
+export function pickRecorderStartSession(options: {
+  explicitSessionId?: string
+  sessions: Array<{ id: string; extensionId: string | null }>
+  busySessionIds: readonly string[]
+}): { kind: 'use'; sessionId: string } | { kind: 'create' } {
+  const explicit = options.explicitSessionId?.trim()
+  if (explicit) {
+    return { kind: 'use', sessionId: explicit }
+  }
+  const busy = new Set(options.busySessionIds)
+  const free = options.sessions.find((session) => {
+    return session.extensionId && !busy.has(session.id)
+  })
+  if (free) {
+    return { kind: 'use', sessionId: free.id }
+  }
+  return { kind: 'create' }
+}
+
+export function formatAmbiguousRecordingsError(recordings: RecordingSummary[]): string {
+  const lines = recordings.map((recording) => {
+    const shown = recording.pageUrls.length > 0 ? recording.pageUrls.join(', ') : recording.lastUrl || '(no pages)'
+    return `  ${recording.recordingId}  session ${recording.sessionId}  ${shown}`
+  })
+  return `Multiple active recordings. Pass a recording id.\n\n${lines.join('\n')}`
 }
 
 // The file stores FULL event data (generous caps below). Context economy
@@ -253,6 +289,50 @@ export class ActionRecorder {
 
   get eventCount() {
     return this.events.length
+  }
+
+  pageUrls(): string[] {
+    try {
+      return this.context.pages().map(safePageUrl).filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  lastPageUrl(): string {
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const event = this.events[i]
+      if (!event) {
+        continue
+      }
+      if (event.type === 'navigation' && typeof event.url === 'string' && event.url) {
+        return event.url
+      }
+      if (typeof event.pageUrl === 'string' && event.pageUrl) {
+        return event.pageUrl
+      }
+      if (event.type === 'page-opened' && typeof event.url === 'string' && event.url) {
+        return event.url
+      }
+      if (event.type === 'recording-started' && Array.isArray(event.urls)) {
+        const urls = event.urls.filter((url): url is string => {
+          return typeof url === 'string' && url.length > 0
+        })
+        if (urls.length > 0) {
+          return urls[urls.length - 1]!
+        }
+      }
+    }
+    return ''
+  }
+
+  summarize(): RecordingSummary {
+    return {
+      recordingId: this.recordingId,
+      sessionId: this.sessionId,
+      pageUrls: this.pageUrls(),
+      lastUrl: this.lastPageUrl(),
+    }
   }
 
   /** @param at epoch ms when the event was observed (defaults to now) */
@@ -1059,10 +1139,12 @@ export class ActionRecordingManager {
     })()
     if (!recorder) {
       if (!recordingId && this.recordings.size > 1) {
-        throw new RecordingError(
-          `Multiple active recordings (${[...this.recordings.keys()].join(', ')}). Pass a recording id.`,
-          400,
-        )
+        const recordings = [...this.recordings.values()].map((item) => {
+          return item.summarize()
+        })
+        const error = new RecordingError(formatAmbiguousRecordingsError(recordings), 400)
+        error.recordings = recordings
+        throw error
       }
       throw new RecordingError(recordingId ? `Recording ${recordingId} not found` : 'No active recording', 404)
     }
@@ -1070,11 +1152,18 @@ export class ActionRecordingManager {
     return { recordingId: recorder.recordingId, ...result }
   }
 
-  list(): Array<{ recordingId: string; sessionId: string; startedAt: number; eventCount: number; filePath: string }> {
+  list(): Array<{
+    recordingId: string
+    sessionId: string
+    startedAt: number
+    eventCount: number
+    filePath: string
+    pageUrls: string[]
+    lastUrl: string
+  }> {
     return [...this.recordings.values()].map((r) => {
       return {
-        recordingId: r.recordingId,
-        sessionId: r.sessionId,
+        ...r.summarize(),
         startedAt: r.startedAt,
         eventCount: r.eventCount,
         filePath: r.filePath,
