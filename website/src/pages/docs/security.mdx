@@ -80,7 +80,7 @@ These routes are safe to expose because:
 
 - **No sensitive data in responses.** Start returns `{ recordingId, sessionId }`, stop returns `{ recordingId }`. No page content, credentials, or user data is exposed.
 - **Recorded events stay local.** Event data is stored on disk and served only via `/recorder/events/:id`, which does **not** allow cross-origin access.
-- **Recording is visible.** The toolbar shows "Recording skill..." so you always know when recording is active.
+- **Recording is visible.** The toolbar shows "Stop recording…" so you always know when recording is active.
 - **Content-Type enforced.** POST requests must use `application/json`, which forces a CORS preflight. Simple form submissions cannot trigger recording.
 - **Token auth still applies.** In remote mode, the auth token is required even for recorder routes.
 

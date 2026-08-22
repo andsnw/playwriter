@@ -583,6 +583,9 @@ export function initPlaywriterToolbar(): void {
   // Record circle icon (red filled circle)
   const RECORD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="#ef4444"/></svg>`
 
+  // Stop square icon (red filled square)
+  const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="#ef4444"/></svg>`
+
   // ── Sound synthesis (cuelume-inspired, Web Audio API) ───────────────────────
   // Recipes from https://github.com/Danilaa1/cuelume — synthesized live, no audio files.
 
@@ -722,7 +725,7 @@ export function initPlaywriterToolbar(): void {
 
   function updateRecordBtn(): void {
     if (isRecording) {
-      recordBtn.innerHTML = '<span>Recording skill\u2026</span>'
+      recordBtn.innerHTML = STOP_SVG + ' <span>Stop recording\u2026</span>'
       recordBtn.setAttribute('data-tooltip', 'Stop and copy analysis prompt')
       recordBtn.classList.add('active')
     } else {
