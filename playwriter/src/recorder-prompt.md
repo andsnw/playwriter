@@ -60,7 +60,7 @@ playwriter recorder events | jq -r 'select(.type == "network") | [.id, .method, 
 playwriter recorder events 14 15
 
 # downloads, uploads, console errors, page errors
-playwriter recorder events | jq 'select(.type == "download" or .type == "file-upload" or .type == "console" or .type == "page-error")'
+playwriter recorder events | jq 'select(.type == "download" or .type == "console" or .type == "page-error" or (.type == "action" and .action == "setInputFiles"))'
 ```
 
 Event types: `recording-started`, `action` (`.code` is locator code such as
@@ -141,8 +141,8 @@ playwriter -s 1 -e 'await page.goto("https://directory.example.com/submit")'
 2. Fill the product name (parameter), then the website URL
 
 ```bash
-playwriter -s 1 -e 'await page.getByRole("textbox", { name: "Product name" }).fill(name)'
-playwriter -s 1 -e 'await page.getByRole("textbox", { name: "Website URL" }).fill(url)'
+playwriter -s 1 -e 'const name = "Acme"; await page.getByRole("textbox", { name: "Product name" }).fill(name)'
+playwriter -s 1 -e 'const url = "https://acme.com"; await page.getByRole("textbox", { name: "Website URL" }).fill(url)'
 ```
 
 3. Click Submit. Expect POST `/api/products` and confirmation text.

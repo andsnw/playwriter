@@ -11,4 +11,4 @@ playwriter recorder events | jq 'select(.action == "fill") | .text'
 
 Thin `page-error` events now keep `.message`.
 
-Skill generation from a recording is now a **SKILL.md** of markdown steps with example `playwriter -e` commands. `recorder stop` and the toolbar copy prompt start with https://playwriter.dev/SKILL.md so the agent reads how Playwriter works first.
+`recorder stop` and the toolbar copy prompt start with https://playwriter.dev/SKILL.md so the agent reads how Playwriter works first. Event commands pass `-r <recordingId>` so concurrent recordings do not mix.

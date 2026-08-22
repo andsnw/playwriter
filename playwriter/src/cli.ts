@@ -1381,7 +1381,7 @@ cli
 // Action recording commands. Recording runs inside the relay daemon (survives
 // CLI exit) and writes user interactions as a JSON array to ~/.playwriter/recordings/.
 // The printed prompt (src/recorder-prompt.md) instructs the agent how to turn a
-// recording into a SKILL.md with playwriter commands.
+// recording into a SKILL.md plus a utils script that automates the same flow.
 // ============================================================================
 
 cli
@@ -1483,8 +1483,8 @@ cli
       console.log('Next steps (full instructions were printed by `recorder start`):')
       console.log('  1. playwriter skill')
       console.log('     or https://playwriter.dev/SKILL.md')
-      console.log('  2. playwriter recorder events')
-      console.log('  3. Write SKILL.md with playwriter -e examples from the events')
+      console.log(`  2. playwriter recorder events -r ${result.recordingId}`)
+      console.log('  3. Write SKILL.md + utils.js with playwriter -e examples from the events')
     } catch (error: any) {
       console.error(`Error: ${error.message}`)
       process.exit(1)

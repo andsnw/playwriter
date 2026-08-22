@@ -164,6 +164,7 @@ describe('action recording', () => {
     const clickActions = events.filter((e) => e.type === 'action' && e.action === 'click')
     expect(clickActions.length).toBeGreaterThan(0)
     expect(clickActions[0].button).toBe('left')
+    expect(clickActions[0].x).toBeUndefined()
     const fillActions = events.filter((e) => e.type === 'action' && e.action === 'fill')
     expect(fillActions[0].text).toBe('hi@example.com')
     // console.error was recorded
