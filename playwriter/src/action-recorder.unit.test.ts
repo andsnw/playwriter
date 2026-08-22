@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { BrowserContext } from '@xmorse/playwright-core'
-import { ActionRecordingManager, isTelemetryUrl, parseRecording } from './action-recorder.js'
+import { ActionRecordingManager, isTelemetryUrl, parseRecording, projectThinEvent } from './action-recorder.js'
 
 function createFakeContext(options: {
   enable?: () => Promise<void>
@@ -176,5 +176,19 @@ describe('ActionRecordingManager start lifecycle', () => {
       await expect(start).rejects.toThrow(/stopped before it finished starting/i)
       expect(manager.list()).toEqual([])
     })
+  })
+})
+
+describe('projectThinEvent', () => {
+  test('keeps a truncated page-error message', () => {
+    const thin = projectThinEvent({
+      t: 1,
+      type: 'page-error',
+      message: 'x'.repeat(250),
+    })
+    expect(typeof thin.message).toBe('string')
+    expect(String(thin.message).startsWith('x')).toBe(true)
+    expect(String(thin.message).length).toBeLessThan(250)
+    expect(String(thin.message)).toContain('more chars')
   })
 })

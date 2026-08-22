@@ -2501,7 +2501,10 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
           'I just recorded a browser workflow (recording ' + result.recordingId + ').',
           'Analyze it and create a reusable skill from it.',
           '',
-          'Run:',
+          'First read how Playwriter works (do not skip):',
+          'https://playwriter.dev/SKILL.md',
+          '',
+          'Then run:',
           'playwriter recorder events',
         ].join('\n')
         chrome.scripting

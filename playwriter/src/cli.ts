@@ -1381,7 +1381,7 @@ cli
 // Action recording commands. Recording runs inside the relay daemon (survives
 // CLI exit) and writes user interactions as a JSON array to ~/.playwriter/recordings/.
 // The printed prompt (src/recorder-prompt.md) instructs the agent how to turn a
-// recording into a SKILL.md + utils script that automates the same flow.
+// recording into a SKILL.md with playwriter commands.
 // ============================================================================
 
 cli
@@ -1481,11 +1481,10 @@ cli
       console.log(`Events file: ${result.filePath}`)
       console.log('')
       console.log('Next steps (full instructions were printed by `recorder start`):')
-      console.log('  1. Ask the user to summarize what they did and call out anything non-obvious')
-      console.log(`  2. playwriter recorder events    # inspect the recorded events (use jq)`)
-      console.log('  3. Verify the recorded locators against the live page (snapshot/exec loop)')
-      console.log('  4. Ask for skill name, location, use case, parameters — then write SKILL.md + utils.js')
-      console.log('  5. Validate: replay the utils end-to-end with test params before calling it done')
+      console.log('  1. playwriter skill')
+      console.log('     or https://playwriter.dev/SKILL.md')
+      console.log('  2. playwriter recorder events')
+      console.log('  3. Write SKILL.md with playwriter -e examples from the events')
     } catch (error: any) {
       console.error(`Error: ${error.message}`)
       process.exit(1)
@@ -1495,12 +1494,12 @@ cli
 cli
   .command(
     'recorder events [...eventIds]',
-    'Print recorded events as jsonl. Uses the latest recording unless `--recording` is passed. Default output is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies, full snapshot diffs).',
+    'Print recorded events as jsonl. Uses the latest recording unless `--recording` is passed. Default output is a thin timeline view (heavy payloads shown as sizes). Pass event ids to print their full details (network request/response bodies).',
   )
   .option('-r, --recording <id>', 'Recording ID (defaults to the latest recording)')
   .option('--host <host>', 'Remote relay server host')
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
-  .option('--type <type>', 'Only print events of this type (e.g. action, network, snapshot-diff)')
+  .option('--type <type>', 'Only print events of this type (e.g. action, network, page-error)')
   .option('--full', 'Print full events for the whole timeline instead of the thin view')
   .example('playwriter recorder events        # latest recording, thin timeline')
   .example(`playwriter recorder events | jq -r '[.id, .t, .type, (.code // .url // empty)] | @tsv'`)

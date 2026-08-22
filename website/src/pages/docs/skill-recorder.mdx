@@ -2,7 +2,7 @@
 $schema: https://holocron.so/frontmatter.json
 title: 'Skill Recorder: Turn Browser Workflows Into Reusable Agent Skills'
 sidebarTitle: Skill Recorder
-description: Record a browser workflow once by hand, and let your agent turn it into a reusable skill with verified Playwright locators, expected outcomes, and importable utils.
+description: Record a browser workflow once by hand, and let your agent turn it into a reusable skill with verified locators, expected outcomes, and example playwriter commands.
 icon: lucide:circle-dot
 ---
 
@@ -12,7 +12,7 @@ Some workflows are **easier to show than to explain**: submitting a SaaS to 20 d
 websites, filling a legacy enterprise form, navigating an internal dashboard with unusual
 UI. Instead of describing every click to your agent, **perform the workflow once** in your
 real browser while Playwriter records everything. Your agent then reads the recording and
-writes a **skill**: a SKILL.md plus a utils script that automates the same flow forever.
+writes a **skill**: a SKILL.md of markdown instructions with example playwriter commands.
 
 <Steps>
   <Step title='Say "start recording"'>
@@ -27,12 +27,13 @@ writes a **skill**: a SKILL.md plus a utils script that automates the same flow 
     Pauses and dead ends are fine; they get filtered out later.
   </Step>
   <Step title='Say "done"'>
-    The agent runs `playwriter recorder stop` and reads the recorded events, verifying
-    each locator against the live page.
+    The agent reads https://playwriter.dev/SKILL.md (or runs `playwriter skill`),
+    then `playwriter recorder stop` and inspects the events, verifying each
+    locator against the live page.
   </Step>
   <Step title='The agent writes the skill'>
-    It produces a `SKILL.md` plus a `utils.js` with importable functions, then validates
-    the whole flow by replaying it end-to-end.
+    It produces a `SKILL.md` with numbered playwriter commands, then validates
+    the whole flow by replaying those commands end-to-end.
   </Step>
 </Steps>
 
@@ -107,33 +108,39 @@ Every event is one JSON line with a timestamp (`t`, seconds since start):
 
 ## What the agent produces
 
-The `recorder start` output includes full instructions for the agent: ask you to summarize
-what you did, inspect the events, verify each locator against the live page, ask for the
-skill name and which values should become parameters, then write two files:
+The `recorder start` output tells the agent to read
+[https://playwriter.dev/SKILL.md](https://playwriter.dev/SKILL.md) first, inspect
+the events, verify locators against the live page, then write a **`SKILL.md`**:
+markdown instructions for the flow you performed, with example **playwriter**
+commands built from the recorded events.
 
-**`SKILL.md`** — the high-level flow: preconditions (already signed-in browser),
-numbered steps with locators, the expected outcome of each step (url change,
-confirmation text, mutating network request), and how to detect success.
+````markdown
+# Submit to directory
 
-**`utils.js`** — importable functions that replay the flow with few tokens:
+Preconditions: already signed in. Playwriter drives the browser.
 
-```js
-export async function submitProduct({ page, name, url }) {
-  await page.goto('https://directory.example.com/submit')
-  await page.getByRole('textbox', { name: 'Product name' }).fill(name)
-  await page.getByRole('textbox', { name: 'Website URL' }).fill(url)
-  await page.getByRole('button', { name: 'Submit' }).click()
-  await page.getByText('Thanks! Your product is under review.').waitFor()
-}
-```
-
-Any agent can then run the whole flow in one command:
+1. Open the submit page
 
 ```bash
-playwriter -s 1 -e "const { submitProduct } = await import('./skills/submit-to-directory/utils.js'); await submitProduct({ page, name: 'Acme', url: 'https://acme.com' })"
+playwriter -s 1 -e 'await page.goto("https://directory.example.com/submit")'
 ```
 
-The agent validates the skill by replaying it end-to-end before calling it done.
+2. Fill name and URL (parameters)
+
+```bash
+playwriter -s 1 -e 'await page.getByRole("textbox", { name: "Product name" }).fill(name)'
+playwriter -s 1 -e 'await page.getByRole("textbox", { name: "Website URL" }).fill(url)'
+```
+
+3. Click Submit. Expect POST `/api/products` and confirmation text.
+
+```bash
+playwriter -s 1 -e 'await page.getByRole("button", { name: "Submit" }).click()'
+```
+````
+
+The agent validates the skill by running those playwriter commands end-to-end
+before calling it done.
 
 ## Use cases
 
@@ -159,9 +166,9 @@ via in-page `fetch`, sharing your cookies and TLS fingerprint.
 
 Record one full "create lead → fill 20 fields → assign owner → save" flow in Salesforce or
 HubSpot. CRMs are deep menus, iframes, and modal choreography that are painful to describe
-in words; the recording captures the exact locators (with iframe paths) and the snapshot
-diffs that confirm each step landed. The skill becomes `createLead({ name, email, owner })`
-that any agent calls in one command.
+in words; the recording captures the exact locators (with iframe paths) and the
+network events that confirm each step landed. The skill becomes numbered
+playwriter commands with parameters `{ name, email, owner }`.
 
 ### Bookings driven by incoming messages
 
@@ -169,14 +176,14 @@ Record a booking on your hotel PMS or scheduling tool once: pick dates in the cu
 calendar widget, select room type, set the rate, confirm. Custom date pickers are the
 classic case where described automation fails and recorded locators succeed. Then connect
 the skill to a trigger: an agent reads incoming emails or WhatsApp messages, extracts guest
-name and dates, and calls `createBooking({ guest, checkIn, checkOut, roomType })` —
+name and dates, and runs the recorded playwriter steps with those parameters —
 verified against the "booking created" network request from the recording.
 
 ### Invoice and document harvesting
 
 Once a month someone logs into 15 SaaS billing pages and downloads invoices for accounting.
 Record one round per vendor; the recorded `download` events tie each file to the click that
-produced it, so the agent writes `downloadInvoices({ month })` per vendor. The same pattern
+produced it, so the agent writes a skill with a `month` parameter per vendor. The same pattern
 covers bank statements, shipping labels, and result PDFs from healthcare or government
 portals.
 
@@ -198,14 +205,14 @@ and replay it for every launch, adapting locators per site while reusing the flo
 EHRs, payer portals, ERPs, government form wizards: no APIs, unusual UI patterns, strict
 field ordering, session timeouts. These flows are far easier to show than to explain. The
 recording captures hidden dependencies too — like a field that only appears after another
-is filled, visible in the snapshot diffs.
+is filled, visible in the event timeline and frames.
 
 ### E2E tests from a manual QA pass
 
-A QA person clicks through a critical flow once; the agent turns the recording into a
-Playwright test. Better than codegen alone, because the recording also contains the
-**expected outcomes** — aria diffs become assertions, network status codes become response
-checks.
+A QA person clicks through a critical flow once; the agent turns the recording into
+playwriter commands an agent can replay. Better than codegen alone, because the
+recording also contains the **expected outcomes** — mutating network status codes
+become response checks.
 
 ### Bug reproduction reports
 
@@ -216,7 +223,7 @@ agent can replay and debug against.
 ### Fixing broken skills
 
 When a site redesign breaks a skill, re-record the flow. The agent diffs the new locators
-against the old utils file and updates only the selectors that changed, keeping the
+against the old SKILL.md and updates only the selectors that changed, keeping the
 working parts untouched.
 
 ## Notes
@@ -230,8 +237,8 @@ working parts untouched.
 
 <Aside>
 <Tip>
-The best prompt is simple: **"start recording, I'll show you the workflow"**. Everything
-else — questions about skill name, parameters, and location — the agent asks at the right
-time, guided by the instructions `recorder start` prints.
+The best prompt is simple: **"start recording, I'll show you the workflow"**. The
+agent guesses skill name, location, and parameters from the events, writes the
+SKILL.md, then tells you what it assumed.
 </Tip>
 </Aside>

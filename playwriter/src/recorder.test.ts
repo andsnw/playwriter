@@ -163,7 +163,9 @@ describe('action recording', () => {
     expect(types.has('screenshot')).toBe(false)
     const clickActions = events.filter((e) => e.type === 'action' && e.action === 'click')
     expect(clickActions.length).toBeGreaterThan(0)
-    expect(clickActions[0].x).toBeUndefined()
+    expect(clickActions[0].button).toBe('left')
+    const fillActions = events.filter((e) => e.type === 'action' && e.action === 'fill')
+    expect(fillActions[0].text).toBe('hi@example.com')
     // console.error was recorded
     const consoleEvents = events.filter((e) => e.type === 'console')
     expect(JSON.stringify(consoleEvents)).toContain('recorder-test-error')
@@ -175,6 +177,7 @@ describe('action recording', () => {
     expect(JSON.stringify(fetchEvents)).toContain('Example Domain')
     const uploadActions = events.filter((e) => e.type === 'action' && String(e.code).includes('setInputFiles'))
     expect(JSON.stringify(uploadActions)).toContain('recorder-test-attachment.txt')
+    expect(uploadActions[0].files).toEqual(['recorder-test-attachment.txt'])
     // every event has a sequential id for the drill-down view
     expect(events.map((e) => e.id)).toEqual(events.map((_, i) => i + 1))
     // thin projection replaces heavy payloads with sizes
@@ -255,8 +258,9 @@ describe('action recording', () => {
     })
     const stop3 = (await stop3Response.json()) as { filePath: string }
     const events3 = parseRecording(fs.readFileSync(stop3.filePath, 'utf-8'))
-    const fillCodes = events3.filter((e) => e.type === 'action' && e.action === 'fill').map((e) => e.code)
-    expect(fillCodes).toEqual(["await page1.getByRole('textbox', { name: 'Search' }).fill('abc');"])
+    const fills3 = events3.filter((e) => e.type === 'action' && e.action === 'fill')
+    expect(fills3.map((e) => e.code)).toEqual(["await page1.getByRole('textbox', { name: 'Search' }).fill('abc');"])
+    expect(fills3[0].text).toBe('abc')
 
     await browser.close()
   }, 120000)
