@@ -8,6 +8,7 @@ import {
   ActionRecordingManager,
   formatAmbiguousRecordingsError,
   isTelemetryUrl,
+  MAX_ACTIVE_RECORDINGS,
   parseRecording,
   pickRecorderStartSession,
   projectThinEvent,
@@ -232,6 +233,41 @@ describe('pickRecorderStartSession', () => {
         busySessionIds: [],
       }),
     ).toEqual({ kind: 'create' })
+  })
+})
+
+describe('ActionRecordingManager active recording cap', () => {
+  test('rejects a start once 10 recordings are already active', async () => {
+    await withTempRecordings(async () => {
+      const manager = new ActionRecordingManager({
+        logger: { log: () => {}, error: () => {} },
+      })
+      for (let i = 1; i <= MAX_ACTIVE_RECORDINGS; i++) {
+        await manager.start({
+          context: createFakeContext({}),
+          sessionId: String(i),
+        })
+      }
+      expect(manager.list()).toHaveLength(MAX_ACTIVE_RECORDINGS)
+      await expect(
+        manager.start({
+          context: createFakeContext({}),
+          sessionId: 'overflow',
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 429,
+        message: expect.stringContaining('10'),
+      })
+      expect(manager.list()).toHaveLength(MAX_ACTIVE_RECORDINGS)
+
+      await manager.stop({ recordingId: manager.list()[0]!.recordingId })
+      const afterStop = await manager.start({
+        context: createFakeContext({}),
+        sessionId: 'overflow',
+      })
+      expect(afterStop.recordingId).toBeTruthy()
+      expect(manager.list()).toHaveLength(MAX_ACTIVE_RECORDINGS)
+    })
   })
 })
 
