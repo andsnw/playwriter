@@ -2415,9 +2415,9 @@ export async function startPlayWriterCDPRelayServer({
   }
 
   // RecordingError carries an HTTP status code hint (409 duplicate, 404 missing, 400 ambiguous)
-  const recordingErrorStatus = (error: unknown): 400 | 404 | 409 | 429 | 500 => {
+  const recordingErrorStatus = (error: unknown): 400 | 404 | 409 | 500 => {
     const statusCode = (error as { statusCode?: number }).statusCode
-    if (statusCode === 400 || statusCode === 404 || statusCode === 409 || statusCode === 429) {
+    if (statusCode === 400 || statusCode === 404 || statusCode === 409) {
       return statusCode
     }
     return 500
@@ -2433,15 +2433,7 @@ export async function startPlayWriterCDPRelayServer({
     try {
       const manager = await getExecutorManager()
       const recordingManager = await getActionRecordingManager()
-      const { pickRecorderStartSession, MAX_ACTIVE_RECORDINGS } = await import('./action-recorder.js')
-      // Refuse before creating a session so a cross-origin start spam cannot
-      // leave empty sessions behind the MAX_ACTIVE_RECORDINGS cap.
-      if (recordingManager.list().length >= MAX_ACTIVE_RECORDINGS) {
-        return c.json(
-          { error: `Too many active recordings (${MAX_ACTIVE_RECORDINGS}). Stop one first.` },
-          429,
-        )
-      }
+      const { pickRecorderStartSession } = await import('./action-recorder.js')
       // Toolbar sends no sessionId. Never fail on many sessions: reuse a free
       // extension session, or create one. Session pick does not matter for
       // playback; the agent chooses the recording at stop time by page URL.

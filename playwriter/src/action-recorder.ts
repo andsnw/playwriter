@@ -157,6 +157,7 @@ export const DEFAULT_RECORDER_ENABLE_TIMEOUT_MS = 15_000
 export const DEFAULT_RECORDER_DISABLE_TIMEOUT_MS = 2_000
 // /recorder/start is callable from any page (toolbar CORS). Cap concurrent
 // recordings so a site cannot open unbounded CDP screencasts or fill the disk.
+// A new start past the cap stops the oldest recording instead of failing.
 export const MAX_ACTIVE_RECORDINGS = 10
 const MAX_RESPONSE_BODY_CHARS = 50000
 const MAX_POST_DATA_CHARS = 10000
@@ -231,7 +232,7 @@ interface PageHandlers {
   pageerror: (error: Error) => void
 }
 
-export type RecordingStopReason = 'user' | 'max-duration' | 'context-closed' | 'start-failed'
+export type RecordingStopReason = 'user' | 'max-duration' | 'context-closed' | 'start-failed' | 'replaced'
 
 export interface ActionRecorderOptions {
   context: BrowserContext
@@ -1091,12 +1092,6 @@ export class ActionRecordingManager {
     disableTimeoutMs?: number
     holdAfterEnable?: () => Promise<void>
   }): Promise<ActionRecorder> {
-    if (this.recordings.size >= MAX_ACTIVE_RECORDINGS) {
-      throw new RecordingError(
-        `Too many active recordings (${MAX_ACTIVE_RECORDINGS}). Stop one first.`,
-        429,
-      )
-    }
     const existing = this.activeRecordingForSession(sessionId)
     if (existing) {
       throw new RecordingError(
@@ -1104,6 +1099,24 @@ export class ActionRecordingManager {
         409,
       )
     }
+    // Drop the oldest from the map in this turn, then add the new one, before
+    // any await. Otherwise two concurrent starts can both pass a size check
+    // and briefly exceed the cap.
+    const evicted = (() => {
+      if (this.recordings.size < MAX_ACTIVE_RECORDINGS) {
+        return undefined
+      }
+      let oldest: ActionRecorder | undefined
+      for (const recorder of this.recordings.values()) {
+        if (!oldest || recorder.startedAt < oldest.startedAt) {
+          oldest = recorder
+        }
+      }
+      if (oldest) {
+        this.removeRecording(oldest.recordingId)
+      }
+      return oldest
+    })()
     // Retry on EEXIST: another relay process sharing the recordings dir may
     // allocate the same id concurrently; its file makes the next scan skip it
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -1124,6 +1137,11 @@ export class ActionRecordingManager {
         this.removeRecording(recorder.recordingId)
       }
       try {
+        if (evicted && attempt === 0) {
+          await evicted.stop({ reason: 'replaced' }).catch((error) => {
+            this.logger.error('[record] failed to stop oldest recording:', error)
+          })
+        }
         await recorder.start()
         this.markActive()
         return recorder

@@ -237,36 +237,38 @@ describe('pickRecorderStartSession', () => {
 })
 
 describe('ActionRecordingManager active recording cap', () => {
-  test('rejects a start once 10 recordings are already active', async () => {
-    await withTempRecordings(async () => {
+  test('stops the oldest recording instead of failing a new start', async () => {
+    await withTempRecordings(async (dir) => {
       const manager = new ActionRecordingManager({
         logger: { log: () => {}, error: () => {} },
       })
-      for (let i = 1; i <= MAX_ACTIVE_RECORDINGS; i++) {
+      const first = await manager.start({
+        context: createFakeContext({}),
+        sessionId: '1',
+      })
+      for (let i = 2; i <= MAX_ACTIVE_RECORDINGS; i++) {
         await manager.start({
           context: createFakeContext({}),
           sessionId: String(i),
         })
       }
       expect(manager.list()).toHaveLength(MAX_ACTIVE_RECORDINGS)
-      await expect(
-        manager.start({
-          context: createFakeContext({}),
-          sessionId: 'overflow',
-        }),
-      ).rejects.toMatchObject({
-        statusCode: 429,
-        message: expect.stringContaining('10'),
-      })
-      expect(manager.list()).toHaveLength(MAX_ACTIVE_RECORDINGS)
 
-      await manager.stop({ recordingId: manager.list()[0]!.recordingId })
-      const afterStop = await manager.start({
+      const next = await manager.start({
         context: createFakeContext({}),
         sessionId: 'overflow',
       })
-      expect(afterStop.recordingId).toBeTruthy()
-      expect(manager.list()).toHaveLength(MAX_ACTIVE_RECORDINGS)
+      const activeIds = manager.list().map((recording) => {
+        return recording.recordingId
+      })
+      expect(activeIds).toHaveLength(MAX_ACTIVE_RECORDINGS)
+      expect(activeIds).not.toContain(first.recordingId)
+      expect(activeIds).toContain(next.recordingId)
+
+      const stopped = parseRecording(fs.readFileSync(path.join(dir, `${first.recordingId}.json`), 'utf-8'))
+      expect(stopped.some((event) => {
+        return event.type === 'recording-stopped' && event.reason === 'replaced'
+      })).toBe(true)
     })
   })
 })
