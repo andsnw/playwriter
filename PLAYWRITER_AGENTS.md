@@ -81,7 +81,7 @@ then click the reload button on the extension card in Chrome. the extension has 
 
 after EVERY change made inside extension/ folder you MUST bump the manifest.json version. then create a git tag with extension@version after committing.
 
-Do not manually edit CHANGELOG.md files for extension changes. If the extension change also affects a public package release note, add a changeset for that public package instead.
+Do not manually edit CHANGELOG.md files for extension changes. Always add a `playwriter` changeset for user-facing extension changes. Never skip a changeset because the files live in `extension/`.
 
 ## github releases
 
@@ -237,17 +237,15 @@ when reviewing or writing cloud-api, scheduled, or any website code that touches
 
 ## changesets
 
-this repo uses Changesets for public package release notes and version bumps.
+**Always add a changeset before committing** any fix or feature. Same commit as the code. Never wait to be asked.
 
-For every fix or feature that affects a public package, add one `.changeset/*.md` file at the repo root. Do not edit package CHANGELOG.md files directly and do not manually bump public package versions; changesets are consumed at publish time to update versions and changelogs.
+Use `playwriter` for CLI, MCP, website, and extension user-facing changes. Use `@xmorse/playwright-core` when the fork API or behaviour changes. Do not list private packages such as `mcp-extension`.
 
-**Always add a changeset before committing** any fix or feature that touches a public package. The changeset must be included in the same commit as the code change, not added later.
-
-Use `patch` for fixes and `minor` for new features. Include every affected public package in the changeset frontmatter, for example `playwriter` or `@xmorse/playwright-core`. Skip private packages such as `mcp-extension`.
+Use `patch` for fixes and `minor` for new features. Do not edit CHANGELOG.md. Do not bump public package versions by hand.
 
 Before adding a changeset, run `gh issue list --state all --limit 20` and reference a matching issue with `Fixes #123` on its own line when the change fixes one.
 
-If a change touches extension code, still bump `extension/manifest.json` because Chrome extension releases are separate from npm package changesets.
+If a change touches extension code, still bump `extension/manifest.json`.
 
 ## debugging playwriter mcp issues
 

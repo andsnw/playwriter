@@ -276,32 +276,55 @@ describe('Security Tests', () => {
     expect(recordingWithToken.status).toBe(200)
   })
 
-  it('should allow cross-origin requests to /recorder/start and /recorder/stop', async () => {
+  it('should allow the extension worker to call /recorder/start and /recorder/stop', async () => {
     const logger = createFileLogger()
     server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, logger })
 
-    // /recorder/start allows cross-site Sec-Fetch-Site (unlike /cli/*)
+    // Service worker fetch is Sec-Fetch-Site: cross-site (chrome-extension → localhost).
+    // These two routes skip that block so the toolbar Record button works.
     const recorderStart = await httpRequest({
       path: '/recorder/start',
       headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
     })
-    // 500 = passed middleware (no session running, but that's OK)
     expect(recorderStart.status).not.toBe(403)
 
-    // /recorder/stop also allows cross-site
     const recorderStop = await httpRequest({
       path: '/recorder/stop',
       headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
     })
     expect(recorderStop.status).not.toBe(403)
 
-    // /recorder/status should still be blocked
     const recorderStatus = await httpRequest({
       path: '/recorder/status',
       method: 'GET',
       headers: { 'Sec-Fetch-Site': 'cross-site' },
     })
     expect(recorderStatus.status).toBe(403)
+  })
+
+  it('should not allow a website origin to pass CORS preflight on /recorder/start', async () => {
+    const logger = createFileLogger()
+    server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, logger })
+
+    const preflight = ({ origin }: { origin: string }) => {
+      return fetch(`http://127.0.0.1:${TEST_PORT}/recorder/start`, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: origin,
+          'Access-Control-Request-Method': 'POST',
+        },
+      })
+    }
+
+    const website = await preflight({ origin: 'https://evil.com' })
+    expect(website.headers.get('access-control-allow-origin')).toBeNull()
+
+    const extension = await preflight({
+      origin: 'chrome-extension://jfeammnjpkecdekppnclgkkffahnhfhe',
+    })
+    expect(extension.headers.get('access-control-allow-origin')).toBe(
+      'chrome-extension://jfeammnjpkecdekppnclgkkffahnhfhe',
+    )
   })
 
   it('should still enforce Content-Type on /recorder/* cross-origin requests', async () => {

@@ -72,19 +72,13 @@ export PLAYWRITER_TOKEN=MY_SECRET
 playwriter session new
 ```
 
-## Recorder route CORS
+## Recorder start and stop
 
-The `/recorder/start` and `/recorder/stop` endpoints accept **cross-origin requests from any origin**. This lets the extension's toolbar button work on any website without CORS failures.
+The toolbar **Record Skill** button does not fetch the relay from the page. The page posts a message to the content script. The **service worker** then calls `POST /recorder/start`.
 
-These routes are safe to expose because:
+CORS on those routes allows only the Playwriter **extension origin**. A website cannot pass the preflight, so it cannot start or stop a recording.
 
-- **No sensitive data in responses.** Start returns `{ recordingId, sessionId }`, stop returns `{ recordingId }`. No page content, credentials, or user data is exposed.
-- **Recorded events stay local.** Event data is stored on disk and served only via `/recorder/events/:id`, which does **not** allow cross-origin access.
-- **Recording is visible.** The toolbar shows "Stop recording…" so you always know when recording is active.
-- **Content-Type enforced.** POST requests must use `application/json`, which forces a CORS preflight. Simple form submissions cannot trigger recording.
-- **Token auth still applies.** In remote mode, the auth token is required even for recorder routes.
-
-All other relay endpoints (code execution, CDP forwarding, event retrieval) remain locked to the extension origin or localhost-only access. A malicious page can at most start or stop a recording; it cannot read recorded data or execute code.
+The worker fetch looks cross-site (`chrome-extension://` to `127.0.0.1`). `/recorder/start` and `/recorder/stop` skip the `Sec-Fetch-Site` block for that reason. `/recorder/events` and `/recorder/status` do not.
 
 ## Cookie safety
 

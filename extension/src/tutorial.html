@@ -144,11 +144,10 @@
         <code>playwriter</code> command runs on this machine. That first command starts the daemon.
       </p>
 
-      <pre><code class="language-bash">npm i -g playwriter
-npx -y skills add https://playwriter.dev
+      <pre><code class="language-bash">npx -y skills add https://playwriter.dev
 
-playwriter session new
-playwriter -s 1 -e "const p = await context.newPage(); await p.goto('https://example.com')"</code></pre>
+npx playwriter session new
+npx playwriter -s 1 -e "context.newPage().then((p) => p.goto('https://example.com'))"</code></pre>
 
       <p>
         Or ask your agent to use the browser. After that, click the icon on a normal website tab to let your agents

@@ -916,28 +916,13 @@ export async function startPlayWriterCDPRelayServer({
   })
 
   // CORS middleware for HTTP endpoints.
-  // Most routes only allow our specific extension IDs, preventing other
-  // extensions from reading responses via fetch/XHR.
-  // /recorder/start and /recorder/stop allow any origin (see security note below).
+  // Only our extension IDs may read responses via fetch/XHR. The toolbar
+  // Record button does not fetch from the page; the service worker does.
   // WebSocket connections have their own separate origin validation.
   app.use(
     '*',
     cors({
-      origin: (origin, c) => {
-        // CORS for recorder start/stop: allow any origin.
-        // Security: these routes only toggle recording state and return
-        // non-sensitive metadata (recordingId, sessionId). Recorded event
-        // data is NOT served here — it lives behind /recorder/events/:id
-        // which stays extension-only. A malicious page can at most start or
-        // stop a recording; it cannot read recorded data or execute code.
-        // Active recordings are capped at MAX_ACTIVE_RECORDINGS so a page
-        // cannot open unbounded CDP screencasts. Content-Type: application/json
-        // is still required (forces preflight), and token auth still applies
-        // in remote mode.
-        const path = c.req.path
-        if (path === '/recorder/start' || path === '/recorder/stop') {
-          return origin || '*'
-        }
+      origin: (origin) => {
         if (!origin.startsWith('chrome-extension://')) {
           return null
         }
@@ -1993,8 +1978,10 @@ export async function startPlayWriterCDPRelayServer({
     // Block cross-origin browser requests via Sec-Fetch-Site header.
     // Browsers always set this forbidden header; it cannot be spoofed.
     // Non-browser clients (Node.js, curl, MCP) don't send it.
-    // Exception: /recorder/start and /recorder/stop allow cross-origin because
-    // they have CORS enabled and only toggle recording state (no data leakage).
+    // Exception: /recorder/start and /recorder/stop. The toolbar service worker
+    // fetch is chrome-extension:// → 127.0.0.1, so Sec-Fetch-Site is cross-site.
+    // Websites still cannot call these: CORS only allows our extension origin,
+    // so a page preflight fails and the POST is never sent.
     const secFetchSite = c.req.header('sec-fetch-site')
     const isRecorderToggle = c.req.path === '/recorder/start' || c.req.path === '/recorder/stop'
     if (!isRecorderToggle && secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {

@@ -155,9 +155,8 @@ const MAX_EVENTS = 10000
 export const DEFAULT_RECORDING_MAX_DURATION_MS = 20 * 60 * 1000
 export const DEFAULT_RECORDER_ENABLE_TIMEOUT_MS = 15_000
 export const DEFAULT_RECORDER_DISABLE_TIMEOUT_MS = 2_000
-// /recorder/start is callable from any page (toolbar CORS). Cap concurrent
-// recordings so a site cannot open unbounded CDP screencasts or fill the disk.
-// A new start past the cap stops the oldest recording instead of failing.
+// Cap concurrent recordings. A new start past the cap stops the oldest
+// recording instead of failing.
 export const MAX_ACTIVE_RECORDINGS = 10
 const MAX_RESPONSE_BODY_CHARS = 50000
 const MAX_POST_DATA_CHARS = 10000
