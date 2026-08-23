@@ -38,6 +38,8 @@ export function initPlaywriterToolbar(): void {
   let pinCount = 0
   let toastTimer: number | null = null
   let overlayEl: HTMLDivElement | null = null
+  let pinMoveRaf = 0
+  let pinMoveEvent: MouseEvent | null = null
   let isRecording = false
   let isDragging = false
   // Declared here so the hoisted setPinMode can reference it before assignment.
@@ -82,7 +84,7 @@ export function initPlaywriterToolbar(): void {
   // pointer-events:none on the host so the shadow-DOM children (pointer-events:all)
   // control interactivity without the host element itself blocking page events
   host.style.cssText =
-    `position:fixed;top:${initTop};left:${initLeft};transform:translateX(-50%);z-index:2147483647;pointer-events:none;font-size:0;line-height:0;`
+    `position:fixed;top:${initTop};left:${initLeft};transform:translateX(-50%);z-index:2147483647;pointer-events:none;font-size:0;line-height:0;contain:layout style paint;`
 
   // Closed shadow root: page scripts cannot access our toolbar DOM
   const shadow = host.attachShadow({ mode: 'closed' })
@@ -103,6 +105,17 @@ export function initPlaywriterToolbar(): void {
       user-select: none;
       box-shadow: 0 12px 60px rgba(0,0,0,0.6), 0 4px 20px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.15);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      contain: layout style paint;
+      opacity: 1;
+      transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+      @starting-style {
+        opacity: 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .toolbar {
+        transition: none;
+      }
     }
     .separator {
       width: 1px;
@@ -308,7 +321,8 @@ export function initPlaywriterToolbar(): void {
         'pointer-events:none',
         'z-index:2147483646',
         `background:${FILL}`,
-        'display:none',
+        'visibility:hidden',
+        'contain:layout style paint',
       ].join(';')
 
       // Four 1px edge divs — same technique as mesurer measurement-box
@@ -339,7 +353,7 @@ export function initPlaywriterToolbar(): void {
     const rect = target.getBoundingClientRect()
     if (!rect.width && !rect.height) return
     const overlay = getOverlay()
-    overlay.style.display = 'block'
+    overlay.style.visibility = 'visible'
     overlay.style.top = rect.top + 'px'
     overlay.style.left = rect.left + 'px'
     overlay.style.width = rect.width + 'px'
@@ -347,10 +361,19 @@ export function initPlaywriterToolbar(): void {
   }
 
   function hideOverlay(): void {
-    if (overlayEl) overlayEl.style.display = 'none'
+    if (overlayEl) overlayEl.style.visibility = 'hidden'
+  }
+
+  function cancelPinMove(): void {
+    if (pinMoveRaf) {
+      cancelAnimationFrame(pinMoveRaf)
+      pinMoveRaf = 0
+    }
+    pinMoveEvent = null
   }
 
   function removeOverlay(): void {
+    cancelPinMove()
     if (overlayEl) {
       overlayEl.remove()
       overlayEl = null
@@ -360,18 +383,16 @@ export function initPlaywriterToolbar(): void {
   // ── Helper: find element at point, skipping our own injected DOM ───────────
 
   function getTargetAt(x: number, y: number): Element | null {
-    // pointer-events:none elements are excluded from elementsFromPoint per spec,
-    // so the overlay is already filtered. We still skip our toolbar host explicitly.
-    const els = document.elementsFromPoint(x, y)
-    return (
-      els.find(
-        (el) =>
-          !el.hasAttribute('data-playwriter-overlay') &&
-          !el.hasAttribute('data-playwriter-toolbar') &&
-          el !== document.documentElement &&
-          el !== document.body,
-      ) ?? null
-    )
+    // Overlay is pointer-events:none so elementFromPoint skips it.
+    // Over the toolbar this returns the host (closed shadow retarget).
+    const el = document.elementFromPoint(x, y)
+    if (!el || el === host || el === document.documentElement || el === document.body) {
+      return null
+    }
+    if (el.hasAttribute('data-playwriter-overlay') || el.hasAttribute('data-playwriter-toolbar')) {
+      return null
+    }
+    return el
   }
 
   // composedPath with a closed shadow root still includes the host element,
@@ -441,13 +462,20 @@ export function initPlaywriterToolbar(): void {
   // ── Pin mode event handlers ────────────────────────────────────────────────
 
   function onMouseMove(e: MouseEvent): void {
-    if (isOverToolbar(e)) {
-      hideOverlay()
-      return
-    }
-    const target = getTargetAt(e.clientX, e.clientY)
-    if (target) positionOverlay(target)
-    else hideOverlay()
+    pinMoveEvent = e
+    if (pinMoveRaf) return
+    pinMoveRaf = requestAnimationFrame(() => {
+      pinMoveRaf = 0
+      const ev = pinMoveEvent
+      if (!ev) return
+      if (isOverToolbar(ev)) {
+        hideOverlay()
+        return
+      }
+      const target = getTargetAt(ev.clientX, ev.clientY)
+      if (target) positionOverlay(target)
+      else hideOverlay()
+    })
   }
 
   // Build a tiny eval that delegates all logging and React inspection to Playwriter.
@@ -559,6 +587,7 @@ export function initPlaywriterToolbar(): void {
       document.addEventListener('click', onClick, true)
       document.addEventListener('keydown', onKeyDown, true)
     } else {
+      cancelPinMove()
       clearAccumulatedOutlines()
       document.documentElement.style.cursor = ''
       hideOverlay()
