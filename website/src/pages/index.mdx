@@ -330,7 +330,7 @@ accepts connections from the extension. No remote server, no account, no telemet
 
 - **Local only:** WebSocket server binds to localhost. Nothing leaves your machine.
 - **Origin validation:** only the Playwriter extension origin is accepted. Browsers cannot spoof the Origin header, so malicious websites cannot connect.
-- **Explicit consent:** only tabs where you clicked the extension icon are controlled. No background access.
+- **Controlled tab scope:** tabs are controlled after an extension click. By default, Playwriter also creates a controlled `about:blank` tab when a client connects with no controlled tabs. Set `PLAYWRITER_AUTO_ENABLE=false` to require a manual click.
 - **Visible automation:** Chrome shows an automation banner on controlled tabs.
 
 ## More resources

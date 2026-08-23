@@ -998,6 +998,17 @@ export async function startPlayWriterCDPRelayServer({
     return bearerToken === token || queryToken === token
   }
 
+  const requireTokenWhenConfigured = async (
+    c: Parameters<Parameters<typeof app.use>[1]>[0],
+    next: () => Promise<void>,
+  ) => {
+    if (!token || hasValidToken(c)) {
+      return next()
+    }
+    logger?.log(pc.red(`Rejecting ${c.req.path}: invalid or missing token`))
+    return c.text('Unauthorized', 401)
+  }
+
   app.use('*', async (c, next) => {
     const hostname = parseHostname(c.req.header('host'))
     if (hostname && ALLOWED_HOSTS.has(hostname)) {
@@ -1030,6 +1041,11 @@ export async function startPlayWriterCDPRelayServer({
   app.get('/version', (c) => {
     return c.json({ version: VERSION })
   })
+
+  app.use('/extension/status', requireTokenWhenConfigured)
+  app.use('/extensions/status', requireTokenWhenConfigured)
+  app.use('/json', requireTokenWhenConfigured)
+  app.use('/json/*', requireTokenWhenConfigured)
 
   app.get('/extension/status', (c) => {
     const defaultExtension = getExtensionConnection(null, { allowFallback: true })
@@ -1139,18 +1155,6 @@ export async function startPlayWriterCDPRelayServer({
         })),
       )
     })
-
-  app.post('/mcp-log', async (c) => {
-    try {
-      const { level, args } = await c.req.json()
-      const logFn = (logger as any)?.[level] || logger?.log
-      const prefix = pc.red(`[MCP] [${level.toUpperCase()}]`)
-      logFn?.(prefix, ...args)
-      return c.json({ ok: true })
-    } catch {
-      return c.json({ ok: false }, 400)
-    }
-  })
 
   // Validate Origin header for WebSocket connections to prevent cross-origin attacks.
   // Browsers always send Origin header for WebSocket connections, but Node.js clients don't.
@@ -2007,15 +2011,9 @@ export async function startPlayWriterCDPRelayServer({
     // from 127.0.0.1 and would skip auth. In-process callers must instead
     // attach the token themselves — they read PLAYWRITER_TOKEN from env, which
     // the `serve` command sets at startup.
-    if (token) {
-      const authHeader = c.req.header('authorization') || ''
-      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-      const url = new URL(c.req.url, 'http://localhost')
-      const queryToken = url.searchParams.get('token')
-      if (bearerToken !== token && queryToken !== token) {
-        logger?.log(pc.red(`Rejecting ${c.req.path}: invalid or missing token`))
-        return c.text('Unauthorized', 401)
-      }
+    if (token && !hasValidToken(c)) {
+      logger?.log(pc.red(`Rejecting ${c.req.path}: invalid or missing token`))
+      return c.text('Unauthorized', 401)
     }
 
     return next()
@@ -2026,6 +2024,20 @@ export async function startPlayWriterCDPRelayServer({
   app.use('/recorder/*', privilegedRouteMiddleware)
   app.use('/stream/*', privilegedRouteMiddleware)
   app.use('/mcp-log', privilegedRouteMiddleware)
+
+  app.post('/mcp-log', async (c) => {
+    try {
+      const body = await c.req.json()
+      const level = typeof body?.level === 'string' ? body.level : 'log'
+      const args = Array.isArray(body?.args) ? body.args : []
+      const logFn = level === 'error' ? logger?.error : logger?.log
+      const prefix = pc.red(`[MCP] [${level.toUpperCase()}]`)
+      logFn?.(prefix, ...args)
+      return c.json({ ok: true })
+    } catch {
+      return c.json({ ok: false }, 400)
+    }
+  })
 
   const DEFAULT_EXEC_TIMEOUT = Number(process.env.PLAYWRITER_EXEC_TIMEOUT) || 10000
 

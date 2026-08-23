@@ -274,6 +274,47 @@ describe('Security Tests', () => {
       headers: { Authorization: `Bearer ${secretToken}` },
     })
     expect(recordingWithToken.status).toBe(200)
+
+    const mcpLogWithoutToken = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: 'log', args: ['test'] }),
+    })
+    expect(mcpLogWithoutToken.status).toBe(401)
+
+    const mcpLogWithToken = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp-log`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${secretToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ level: 'log', args: ['test'] }),
+    })
+    expect(mcpLogWithToken.status).toBe(200)
+  })
+
+  it('should enforce token on browser metadata routes when token mode is enabled', async () => {
+    const secretToken = 'test-secret-token'
+    server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, token: secretToken })
+    const paths = ['/extension/status', '/extensions/status', '/json/list']
+
+    const unauthorizedStatuses = await Promise.all(
+      paths.map(async (path) => {
+        const response = await fetch(`http://127.0.0.1:${TEST_PORT}${path}`)
+        return response.status
+      }),
+    )
+    expect(unauthorizedStatuses).toEqual(paths.map(() => 401))
+
+    const authorizedStatuses = await Promise.all(
+      paths.map(async (path) => {
+        const response = await fetch(`http://127.0.0.1:${TEST_PORT}${path}`, {
+          headers: { Authorization: `Bearer ${secretToken}` },
+        })
+        return response.status
+      }),
+    )
+    expect(authorizedStatuses).toEqual(paths.map(() => 200))
   })
 
   it('should allow the extension worker to call /recorder/start and /recorder/stop', async () => {
@@ -339,16 +380,24 @@ describe('Security Tests', () => {
     expect(textPlain.status).toBe(415)
   })
 
-  it('should not require token on /cli/* when no token is configured', async () => {
+  it('should not require token on local routes when no token is configured', async () => {
     const logger = createFileLogger()
     server = await startPlayWriterCDPRelayServer({ port: TEST_PORT, logger })
 
-    // Without token mode, /cli/sessions should work with just proper headers
-    const res = await httpRequest({
-      path: '/cli/sessions',
-      method: 'GET',
-      headers: {},
+    const paths = ['/cli/sessions', '/extension/status', '/extensions/status', '/json/list']
+    const statuses = await Promise.all(
+      paths.map(async (path) => {
+        const response = await fetch(`http://127.0.0.1:${TEST_PORT}${path}`)
+        return response.status
+      }),
+    )
+    expect(statuses).toEqual(paths.map(() => 200))
+
+    const mcpLog = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: 'log', args: ['test'] }),
     })
-    expect(res.status).toBe(200)
+    expect(mcpLog.status).toBe(200)
   })
 })

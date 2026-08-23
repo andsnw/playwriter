@@ -253,7 +253,7 @@ Also works on a LAN without traforo (`PLAYWRITER_HOST=192.168.1.10`). Full guide
 
 - **Local only**: WebSocket server on `localhost:19988`
 - **Origin validation**: Only our extension IDs allowed (browsers can't spoof Origin)
-- **Explicit consent**: Only tabs where you clicked the extension icon
+- **Controlled tab scope**: Tabs are controlled after an extension click. By default, Playwriter also creates a controlled `about:blank` tab when a client connects with no controlled tabs. Set `PLAYWRITER_AUTO_ENABLE=false` to require a manual click.
 - **Visible automation**: Chrome shows automation banner on controlled tabs
 - **No remote access**: Malicious websites cannot connect
 
