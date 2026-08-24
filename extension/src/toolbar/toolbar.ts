@@ -203,25 +203,6 @@ export function initPlaywriterToolbar(): void {
       background: rgba(255,255,255,0.08);
       color: rgba(228,228,231,1);
     }
-    .toast {
-      position: fixed;
-      background: #0f172a;
-      border-radius: 8px;
-      padding: 9px 18px;
-      color: rgba(255, 255, 255, 0.85);
-      font-size: 11px;
-      font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-      pointer-events: none;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-      white-space: nowrap;
-      z-index: 1;
-      --toast-transform: translateX(-50%);
-      animation: toast-in 0.15s ease;
-    }
-    @keyframes toast-in {
-      from { opacity: 0; transform: var(--toast-transform) translateY(4px); }
-      to   { opacity: 1; transform: var(--toast-transform); }
-    }
     [data-tooltip] {
       position: relative;
     }
@@ -232,8 +213,9 @@ export function initPlaywriterToolbar(): void {
       left: 50%;
       transform: translateX(-50%);
       padding: 5px 10px;
-      background: #0f172a;
-      color: rgba(255, 255, 255, 0.85);
+      background: #1c1c1c;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(228,228,231,1);
       font-size: 11px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       white-space: nowrap;
@@ -241,7 +223,7 @@ export function initPlaywriterToolbar(): void {
       pointer-events: none;
       opacity: 0;
       transition: opacity 0.15s ease;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 12px 60px rgba(0,0,0,0.6), 0 4px 20px rgba(0,0,0,0.4);
     }
     [data-tooltip]:hover::after {
       opacity: 1;
@@ -257,10 +239,37 @@ export function initPlaywriterToolbar(): void {
   shadow.appendChild(styleEl)
   shadow.appendChild(toolbarEl)
 
-  // ── Helper: toast notification ─────────────────────────────────────────────
+  // Own overlay so position:fixed is viewport-relative. The toolbar host has
+  // transform + contain, which would otherwise make the toast a child of the bar.
+  const toastHost = document.createElement('div')
+  toastHost.setAttribute('data-playwriter-toolbar', '1')
+  toastHost.style.cssText =
+    'position:fixed;inset:0;z-index:2147483647;pointer-events:none;'
+  const toastShadow = toastHost.attachShadow({ mode: 'closed' })
+  const toastStyle = document.createElement('style')
+  toastStyle.textContent = `
+    .toast {
+      position: absolute;
+      background: #1c1c1c;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 9999px;
+      padding: 6px 14px;
+      color: rgba(228,228,231,1);
+      font-size: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      box-shadow: 0 12px 60px rgba(0,0,0,0.6), 0 4px 20px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.15);
+      white-space: nowrap;
+      animation: toast-in 0.15s ease;
+    }
+    @keyframes toast-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+  `
+  toastShadow.appendChild(toastStyle)
 
-  function showToast(msg: string, anchorRect?: DOMRect): void {
-    shadow.querySelectorAll('.toast').forEach((el) => {
+  function showToast(msg: string, anchor?: { rect: DOMRect; clientX: number }): void {
+    toastShadow.querySelectorAll('.toast').forEach((el) => {
       el.remove()
     })
     if (toastTimer !== null) clearTimeout(toastTimer)
@@ -268,34 +277,19 @@ export function initPlaywriterToolbar(): void {
     toastEl.className = 'toast'
     toastEl.textContent = msg
 
-    if (anchorRect) {
-      // Position like a tooltip just below the element, centered horizontally
-      const GAP = 8
-      const centerX = anchorRect.left + anchorRect.width / 2
-      const belowY = anchorRect.bottom + GAP
+    const GAP = 10
+    const bar = host.getBoundingClientRect()
+    const x = anchor
+      ? Math.max(8, Math.min(anchor.clientX, window.innerWidth - 8))
+      : bar.left + bar.width / 2
+    const belowY = anchor ? anchor.rect.bottom + GAP : bar.bottom + GAP
+    const aboveY = anchor ? anchor.rect.top - GAP : bar.top - GAP
+    const fitsBelow = belowY + 36 < window.innerHeight
+    toastEl.style.left = x + 'px'
+    toastEl.style.top = (fitsBelow ? belowY : aboveY) + 'px'
+    toastEl.style.transform = fitsBelow ? 'translateX(-50%)' : 'translateX(-50%) translateY(-100%)'
 
-      // Flip above if too close to viewport bottom (toast is ~30px tall)
-      const fitsBelow = belowY + 36 < window.innerHeight
-      const top = fitsBelow ? belowY : anchorRect.top - GAP
-      const transformOrigin = fitsBelow ? 'top center' : 'bottom center'
-
-      toastEl.style.left = Math.max(8, Math.min(centerX, window.innerWidth - 8)) + 'px'
-      toastEl.style.top = top + 'px'
-      // Set base transform via CSS variable so the @keyframes animation includes it.
-      // Without this, the keyframe overrides the inline transform during animation
-      // and the toast jumps when positioned above the anchor (translateY(-100%)).
-      const baseTransform = fitsBelow ? 'translateX(-50%)' : 'translateX(-50%) translateY(-100%)'
-      toastEl.style.setProperty('--toast-transform', baseTransform)
-      toastEl.style.transform = baseTransform
-      toastEl.style.transformOrigin = transformOrigin
-    } else {
-      // Fallback: bottom-center of viewport
-      toastEl.style.bottom = '20px'
-      toastEl.style.left = '50%'
-      toastEl.style.transform = 'translateX(-50%)'
-    }
-
-    shadow.appendChild(toastEl)
+    toastShadow.appendChild(toastEl)
     toastTimer = window.setTimeout(() => {
       toastEl.remove()
     }, 1900)
@@ -520,7 +514,7 @@ export function initPlaywriterToolbar(): void {
       copyText(clipboardText)
       showToast(
         `Copied ${accumulatedPins.length} element references (shift+click to add more)`,
-        target.getBoundingClientRect(),
+        { rect: target.getBoundingClientRect(), clientX: e.clientX },
       )
     } else {
       // Normal click: include any accumulated pins, then exit pin mode.
@@ -542,7 +536,7 @@ export function initPlaywriterToolbar(): void {
         copyText(clipboardText)
         showToast(
           `Copied ${allPins.length} element references, use them in your agent prompt`,
-          rect,
+          { rect, clientX: e.clientX },
         )
       } else {
         const code = buildInspectionCode(n, url)
@@ -550,7 +544,7 @@ export function initPlaywriterToolbar(): void {
         copyText(clipboardText)
         showToast(
           'Copied playwriter element reference, use it in your agent prompt',
-          rect,
+          { rect, clientX: e.clientX },
         )
       }
       setPinMode(false)
@@ -864,6 +858,7 @@ export function initPlaywriterToolbar(): void {
 
   // Attach host to the document (appended to <html> so it survives body rewrites)
   document.documentElement.appendChild(host)
+  document.documentElement.appendChild(toastHost)
 
   // ── Globals exposed for background.ts to call via executeScript ─────────────
 
@@ -888,6 +883,7 @@ export function initPlaywriterToolbar(): void {
     setPinMode(false)
     removeOverlay()
     host.remove()
+    toastHost.remove()
     delete window.__playwriterToolbarInstalled
     delete window.__playwriterToolbarDestroy
     delete window.__playwriterToolbarSetRecording
