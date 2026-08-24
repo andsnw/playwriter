@@ -297,9 +297,8 @@ describe('action recording', () => {
     const extraBrowser = await chromium.connectOverCDP(getCdpUrl({ port: TEST_PORT }))
     const extraContext = extraBrowser.contexts()[0]
     expect(extraContext).toBeDefined()
-    const enableRecorder = Reflect.get(extraContext, '_enableRecorder')
-    expect(typeof enableRecorder).toBe('function')
-    await enableRecorder.call(extraContext, {
+    await extraContext._enableRecorder({
+      language: 'javascript',
       mode: 'recording',
       recorderMode: 'api',
     }, {

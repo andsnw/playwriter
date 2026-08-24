@@ -69,19 +69,6 @@ interface RecorderLogger {
   error: (...args: unknown[]) => void
 }
 
-// Fork-internal client APIs, not present in the generated public types
-interface RecorderCapableContext {
-  _enableRecorder: (
-    params: { language: string; mode: string; recorderMode: string },
-    sink: {
-      actionAdded?: (page: Page, actionInContext: ActionInContext, code: string) => void
-      actionUpdated?: (page: Page, actionInContext: ActionInContext, code: string) => void
-      signalAdded?: (page: Page, signalInContext: SignalInContext) => void
-    },
-  ) => Promise<void>
-  _disableRecorder: () => Promise<void>
-}
-
 interface ActionInContext {
   action: { name: string; selector?: string; [key: string]: unknown }
   frame?: { pageAlias?: string; framePath?: string[] }
@@ -90,6 +77,20 @@ interface ActionInContext {
 interface SignalInContext {
   signal: { name: string; url?: string; [key: string]: unknown }
   frame?: { pageAlias?: string }
+}
+
+declare module '@xmorse/playwright-core' {
+  interface BrowserContext {
+    _enableRecorder(
+      params: { language: string; mode: string; recorderMode: string },
+      sink: {
+        actionAdded?: (page: Page, actionInContext: ActionInContext, code: string) => void
+        actionUpdated?: (page: Page, actionInContext: ActionInContext, code: string) => void
+        signalAdded?: (page: Page, signalInContext: SignalInContext) => void
+      },
+    ): Promise<void>
+    _disableRecorder(): Promise<void>
+  }
 }
 
 export interface RecordedEvent {
@@ -515,8 +516,7 @@ export class ActionRecorder {
   // _enableRecorder can hang forever if a frame never gets a main world
   // (empty target, OOPIF). Race start against a timeout and against stop().
   private async enableRecorder() {
-    const recorderContext = this.context as unknown as RecorderCapableContext
-    const enable = recorderContext._enableRecorder(
+    const enable = this.context._enableRecorder(
       { language: 'javascript', mode: 'recording', recorderMode: 'api' },
       {
         actionAdded: (page, actionInContext, code) => {
@@ -608,8 +608,7 @@ export class ActionRecorder {
   }
 
   private async disableRecorder() {
-    const recorderContext = this.context as unknown as RecorderCapableContext
-    const disable = recorderContext._disableRecorder().catch((error) => {
+    const disable = this.context._disableRecorder().catch((error) => {
       this.logger.error('[record] failed to disable recorder:', error)
     })
     if (this.disableTimeoutMs <= 0) {
