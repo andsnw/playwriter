@@ -265,4 +265,76 @@ describe('action recording', () => {
 
     await browser.close()
   }, 120000)
+
+  it('records one click when a second CDP client also enables the recorder', async () => {
+    const browserContext = testCtx!.browserContext
+    const serviceWorker = await getExtensionServiceWorker(browserContext)
+
+    const page = await browserContext.newPage()
+    await page.goto('https://example.com/')
+    await page.bringToFront()
+    await serviceWorker.evaluate(async () => {
+      await globalThis.toggleExtensionForActiveTab()
+    })
+    await new Promise((r) => setTimeout(r, 200))
+
+    const sessionResponse = await fetch(`${SERVER_URL}/cli/session/new`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({}),
+    })
+    const session = (await sessionResponse.json()) as { id: string }
+    expect(session.id).toBeTruthy()
+
+    const startResponse = await fetch(`${SERVER_URL}/recorder/start`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ sessionId: session.id }),
+    })
+    const start = (await startResponse.json()) as { recordingId: string; error?: string }
+    expect(start.error).toBeUndefined()
+
+    const extraBrowser = await chromium.connectOverCDP(getCdpUrl({ port: TEST_PORT }))
+    const extraContext = extraBrowser.contexts()[0]
+    expect(extraContext).toBeDefined()
+    const enableRecorder = Reflect.get(extraContext, '_enableRecorder')
+    expect(typeof enableRecorder).toBe('function')
+    await enableRecorder.call(extraContext, {
+      mode: 'recording',
+      recorderMode: 'api',
+    }, {
+      actionAdded: () => {},
+      actionUpdated: () => {},
+    })
+
+    const cdpPage = extraContext!
+      .pages()
+      .find((p) => p.url().includes('example.com'))
+    expect(cdpPage).toBeDefined()
+    await cdpPage!.evaluate(() => {
+      document.body.innerHTML = `<button id="only-once">Only once</button>`
+    })
+    const cdp = await getCDPSessionForPage({ page: cdpPage! })
+    const box = await cdpPage!.locator('#only-once').boundingBox()
+    expect(box).toBeTruthy()
+    const x = box!.x + box!.width / 2
+    const y = box!.y + box!.height / 2
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+    await new Promise((r) => setTimeout(r, 1500))
+
+    const stopResponse = await fetch(`${SERVER_URL}/recorder/stop`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ recordingId: start.recordingId }),
+    })
+    const stop = (await stopResponse.json()) as { filePath: string }
+    const events = parseRecording(fs.readFileSync(stop.filePath, 'utf-8'))
+    const clicks = events.filter((e) => e.type === 'action' && e.action === 'click')
+    expect(clicks.map((e) => e.code)).toEqual([
+      "await page1.getByRole('button', { name: 'Only once' }).click();",
+    ])
+
+    await extraBrowser.close()
+  }, 120000)
 })
