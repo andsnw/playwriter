@@ -1058,9 +1058,10 @@ export class ActionRecordingManager {
   }
 
   private markActive() {
-    if (this.recordings.size === 1) {
-      this.onActiveChanged?.(true)
-    }
+    // Always notify. The toolbar only flips to Stop when it hears this.
+    // Skipping after the first recording left the button stuck on Record Skill
+    // while more starts piled up (daemon already had an active recording).
+    this.onActiveChanged?.(true)
   }
 
   private nextRecordingId(): string {

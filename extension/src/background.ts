@@ -1579,6 +1579,11 @@ function detachTab(tabId: number, shouldDetachDebugger: boolean): void {
   }
 }
 
+// Recording started from the toolbar. Passed back on stop so the Stop button
+// is never ambiguous when another recording is also active.
+let toolbarRecordingId: string | null = null
+let toolbarStartInFlight = false
+
 // Inject start/stop recording callbacks into a single tab's toolbar.
 // Called on tab attach and whenever the relay notifies a state change.
 //
@@ -1614,15 +1619,30 @@ function injectRecorderCallbacks(tabId: number): void {
       return chrome.scripting.executeScript({
         target: { tabId, allFrames: false },
         world: 'MAIN',
-        func: () => {
+        func: (recording: boolean) => {
           ;(window as any).__playwriterToolbarStartRecording = () => {
             window.postMessage({ __playwriter: 'recorder_start' }, '*')
           }
           ;(window as any).__playwriterToolbarStopRecording = () => {
             window.postMessage({ __playwriter: 'recorder_stop' }, '*')
           }
+          ;(window as any).__playwriterToolbarSetRecording?.(recording)
         },
+        args: [toolbarRecordingId !== null],
       })
+    })
+    .catch(() => {})
+}
+
+function setRecorderStateInTab(tabId: number, recording: boolean): void {
+  chrome.scripting
+    .executeScript({
+      target: { tabId, allFrames: false },
+      world: 'MAIN',
+      func: (rec: boolean) => {
+        ;(window as any).__playwriterToolbarSetRecording?.(rec)
+      },
+      args: [recording],
     })
     .catch(() => {})
 }
@@ -1631,17 +1651,10 @@ function injectRecorderCallbacks(tabId: number): void {
 function setRecorderStateInAllTabs(recording: boolean): void {
   const { tabs } = store.getState()
   for (const [tabId, tab] of tabs) {
-    if (tab.state !== 'connected') continue
-    chrome.scripting
-      .executeScript({
-        target: { tabId, allFrames: false },
-        world: 'MAIN',
-        func: (rec: boolean) => {
-          ;(window as any).__playwriterToolbarSetRecording?.(rec)
-        },
-        args: [recording],
-      })
-      .catch(() => {})
+    if (tab.state !== 'connected') {
+      continue
+    }
+    setRecorderStateInTab(tabId, recording)
   }
 }
 
@@ -2483,10 +2496,6 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
 // Sync icons on first load
 void updateIcons()
 
-// Recording started from the toolbar. Passed back on stop so the Stop button
-// is never ambiguous when another recording is also active.
-let toolbarRecordingId: string | null = null
-
 function toastToolbar(tabId: number, msg: string): void {
   chrome.scripting
     .executeScript({
@@ -2506,25 +2515,43 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   // MAIN world toolbar → ISOLATED content script → here → relay HTTP endpoint.
   if (message.action === 'actionRecorderStart') {
     const senderTabId = sender.tab?.id
+    if (toolbarRecordingId || toolbarStartInFlight) {
+      return false
+    }
+    toolbarStartInFlight = true
     fetch(`http://${RELAY_HOST}:${RELAY_PORT}/recorder/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     })
       .then(async (response) => {
-        const result = (await response.json()) as { error?: string; recordingId?: string }
+        const result = (await response.json().catch(() => {
+          return {}
+        })) as { error?: string; recordingId?: string }
         if (response.ok && result.recordingId) {
           toolbarRecordingId = result.recordingId
+          if (senderTabId) {
+            setRecorderStateInTab(senderTabId, true)
+          }
           return
         }
         logger.error('Action recorder start failed:', result.error || response.status)
         if (!senderTabId) {
           return
         }
+        setRecorderStateInTab(senderTabId, false)
         toastToolbar(senderTabId, result.error || 'Failed to start recording')
       })
       .catch((err) => {
         logger.error('Action recorder start failed:', err)
+        if (!senderTabId) {
+          return
+        }
+        setRecorderStateInTab(senderTabId, false)
+        toastToolbar(senderTabId, 'Failed to start recording')
+      })
+      .finally(() => {
+        toolbarStartInFlight = false
       })
     return false
   }

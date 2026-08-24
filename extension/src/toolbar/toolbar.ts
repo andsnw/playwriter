@@ -41,6 +41,7 @@ export function initPlaywriterToolbar(): void {
   let pinMoveRaf = 0
   let pinMoveEvent: MouseEvent | null = null
   let isRecording = false
+  let startInFlight = false
   let isDragging = false
   // Declared here so the hoisted setPinMode can reference it before assignment.
   let pinBtn!: HTMLButtonElement
@@ -202,6 +203,24 @@ export function initPlaywriterToolbar(): void {
     .record-btn.active:hover {
       background: rgba(255,255,255,0.08);
       color: rgba(228,228,231,1);
+    }
+    .record-btn.loading {
+      cursor: default;
+      pointer-events: none;
+    }
+    .record-btn .spinner {
+      display: block;
+      width: 12px;
+      height: 12px;
+      animation: record-spin 0.7s linear infinite;
+    }
+    @keyframes record-spin {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .record-btn .spinner {
+        animation: none;
+      }
     }
     [data-tooltip] {
       position: relative;
@@ -609,6 +628,8 @@ export function initPlaywriterToolbar(): void {
   // Stop square icon (red filled square)
   const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="#ef4444"/></svg>`
 
+  const SPINNER_SVG = `<svg class="spinner" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.25"/><path d="M20 12a8 8 0 0 0-8-8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>`
+
   // ── Sound synthesis (cuelume-inspired, Web Audio API) ───────────────────────
   // Recipes from https://github.com/Danilaa1/cuelume — synthesized live, no audio files.
 
@@ -747,17 +768,36 @@ export function initPlaywriterToolbar(): void {
   recordBtn.className = 'record-btn'
 
   function updateRecordBtn(): void {
+    recordBtn.classList.remove('active', 'loading')
+    recordBtn.disabled = false
     if (isRecording) {
       recordBtn.innerHTML = STOP_SVG + ' <span>Stop recording\u2026</span>'
       recordBtn.setAttribute('data-tooltip', 'Stop and copy analysis prompt')
       recordBtn.classList.add('active')
-    } else {
-      recordBtn.innerHTML = RECORD_SVG + ' <span>Record Skill</span>'
-      recordBtn.setAttribute('data-tooltip', 'Capture actions as a reusable skill')
-      recordBtn.classList.remove('active')
+      return
     }
+    if (startInFlight) {
+      recordBtn.innerHTML = SPINNER_SVG + ' <span>Starting\u2026</span>'
+      recordBtn.setAttribute('data-tooltip', 'Starting recorder')
+      recordBtn.classList.add('loading')
+      recordBtn.disabled = true
+      return
+    }
+    recordBtn.innerHTML = RECORD_SVG + ' <span>Record Skill</span>'
+    recordBtn.setAttribute('data-tooltip', 'Capture actions as a reusable skill')
   }
   updateRecordBtn()
+
+  function setRecording(recording: boolean): void {
+    startInFlight = false
+    if (isRecording !== recording) {
+      isRecording = recording
+      if (recording) {
+        setPinMode(false)
+      }
+    }
+    updateRecordBtn()
+  }
 
   recordBtn.addEventListener('click', (e: MouseEvent) => {
     e.stopPropagation()
@@ -766,11 +806,16 @@ export function initPlaywriterToolbar(): void {
       window.__playwriterToolbarStopRecording?.()
       return
     }
+    if (startInFlight) {
+      return
+    }
     if (!window.__playwriterToolbarStartRecording) {
       showToast('Relay not connected')
       return
     }
     playSound('loading')
+    startInFlight = true
+    updateRecordBtn()
     window.__playwriterToolbarStartRecording()
   })
 
@@ -870,12 +915,7 @@ export function initPlaywriterToolbar(): void {
     playSound(name)
   }
 
-  window.__playwriterToolbarSetRecording = function (recording: boolean): void {
-    if (isRecording === recording) return
-    isRecording = recording
-    if (recording) setPinMode(false)
-    updateRecordBtn()
-  }
+  window.__playwriterToolbarSetRecording = setRecording
 
   // ── Cleanup hook called by background.ts on tab disconnect ─────────────────
 

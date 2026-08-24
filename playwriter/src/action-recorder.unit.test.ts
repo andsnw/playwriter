@@ -138,6 +138,32 @@ describe('ActionRecordingManager start lifecycle', () => {
     })
   })
 
+  test('notifies onActiveChanged on every successful start, not only the first', async () => {
+    await withTempRecordings(async () => {
+      const active: boolean[] = []
+      const manager = new ActionRecordingManager({
+        logger: { log: () => {}, error: () => {} },
+        onActiveChanged: (value) => {
+          active.push(value)
+        },
+      })
+      await manager.start({
+        context: createFakeContext({}),
+        sessionId: '1',
+      })
+      await manager.start({
+        context: createFakeContext({}),
+        sessionId: '2',
+      })
+      expect(active).toEqual([true, true])
+      const firstId = manager.list()[0].recordingId
+      await manager.stop({ recordingId: firstId })
+      expect(active).toEqual([true, true])
+      await manager.stop({})
+      expect(active).toEqual([true, true, false])
+    })
+  })
+
   test('start still fails when disable also hangs', async () => {
     await withTempRecordings(async () => {
       const manager = new ActionRecordingManager({
